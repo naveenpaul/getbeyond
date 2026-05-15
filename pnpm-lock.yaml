@@ -56,9 +56,6 @@ importers:
       class-validator:
         specifier: ^0.14.0
         version: 0.14.4
-      libsodium-wrappers:
-        specifier: ^0.7.13
-        version: 0.7.16
       pg-boss:
         specifier: ^10.1.0
         version: 10.4.2
@@ -81,9 +78,6 @@ importers:
       '@nestjs/testing':
         specifier: ^10.4.0
         version: 10.4.22(@nestjs/common@10.4.22(class-transformer@0.5.1)(class-validator@0.14.4)(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@10.4.22(@nestjs/common@10.4.22(class-transformer@0.5.1)(class-validator@0.14.4)(reflect-metadata@0.2.2)(rxjs@7.8.2))(reflect-metadata@0.2.2)(rxjs@7.8.2))
-      '@types/libsodium-wrappers':
-        specifier: ^0.7.14
-        version: 0.7.14
       '@types/node':
         specifier: ^20.14.0
         version: 20.19.41
@@ -111,6 +105,18 @@ importers:
       tsconfig-paths:
         specifier: ^4.2.0
         version: 4.2.0
+      typescript:
+        specifier: ^5.5.0
+        version: 5.9.3
+      vitest:
+        specifier: ^2.0.0
+        version: 2.1.9(@types/node@20.19.41)(terser@5.47.1)
+
+  packages/shared:
+    devDependencies:
+      '@types/node':
+        specifier: ^20.14.0
+        version: 20.19.41
       typescript:
         specifier: ^5.5.0
         version: 5.9.3
@@ -735,9 +741,6 @@ packages:
 
   '@types/jsonwebtoken@9.0.5':
     resolution: {integrity: sha512-VRLSGzik+Unrup6BsouBeHsf4d1hOEgYWTm/7Nmw1sXoN1+tRly/Gy/po3yeahnP4jfnQWWAhQAqcNfH7ngOkA==}
-
-  '@types/libsodium-wrappers@0.7.14':
-    resolution: {integrity: sha512-5Kv68fXuXK0iDuUir1WPGw2R9fOZUlYlSAa0ztMcL0s0BfIDTqg9GXz8K30VJpPP3sxWhbolnQma2x+/TfkzDQ==}
 
   '@types/node-fetch@2.6.13':
     resolution: {integrity: sha512-QGpRVpzSaUs30JBSGPjOg4Uveu384erbHBoT1zeONvyCfwQxIkUshLAOqN/k9EjGviPRmWTTe6aH2qySWKTVSw==}
@@ -1826,12 +1829,6 @@ packages:
 
   libphonenumber-js@1.13.1:
     resolution: {integrity: sha512-GEw0GLL7YUUA6nv21IsCvVjtI5Ejn84sjbdfQ9KxdbqEVOk1PZh7xejn01EEiniKw+dBeCfim+8MGeuvVuE2BA==}
-
-  libsodium-wrappers@0.7.16:
-    resolution: {integrity: sha512-Gtr/WBx4dKjvRL1pvfwZqu7gO6AfrQ0u9vFL+kXihtHf6NfkROR8pjYWn98MFDI3jN19Ii1ZUfPR9afGiPyfHg==}
-
-  libsodium@0.7.16:
-    resolution: {integrity: sha512-3HrzSPuzm6Yt9aTYCDxYEG8x8/6C0+ag655Y7rhhWZM9PT4NpdnbqlzXhGZlDnkgR6MeSTnOt/VIyHLs9aSf+Q==}
 
   light-my-request@5.14.0:
     resolution: {integrity: sha512-aORPWntbpH5esaYpGOOmri0OHDOe3wC5M2MQxZ9dvMLZm6DnaAn0kJlcbU9hwsQgLzmZyReKwFwwPkR+nHu5kA==}
@@ -3378,8 +3375,6 @@ snapshots:
     dependencies:
       '@types/node': 20.19.41
 
-  '@types/libsodium-wrappers@0.7.14': {}
-
   '@types/node-fetch@2.6.13':
     dependencies:
       '@types/node': 20.19.41
@@ -4629,12 +4624,6 @@ snapshots:
       type-check: 0.4.0
 
   libphonenumber-js@1.13.1: {}
-
-  libsodium-wrappers@0.7.16:
-    dependencies:
-      libsodium: 0.7.16
-
-  libsodium@0.7.16: {}
 
   light-my-request@5.14.0:
     dependencies:
