@@ -1,0 +1,513 @@
+// getbeyond — canonical Prisma schema.
+//
+// Generated from the eng-reviewed plan at ../../../gtm_teammates_plan.md.
+// Pass-1 + pass-2 decisions referenced inline (e.g. "Issue 4A", "D2", "codex T6").
+//
+// Architecture invariants:
+//   1. Multi-user from day 1 — every tenant-scoped table has `orgId`.
+//   2. Citations first-class — Claim has citationId OR abstained=true (enforced in runtime).
+//   3. Audit log is primary — AgentRun + ToolCall + ModelCall + Citation are not afterthoughts.
+//   4. Connectors quarantined — Contact unifies; ContactSource preserves per-vendor data.
+//   5. DraftAction is an outbox — strict ordering via dependsOnId, idempotency-keyed CRM writes.
+
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["postgresqlExtensions"]
+}
+
+datasource db {
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")
+  extensions = [citext]
+}
+
+// ============================================================================
+// Tenancy — Organization + User
+// ============================================================================
+
+enum Plan {
+  self_host
+  solo
+  team
+  growth
+  enterprise
+}
+
+enum UserRole {
+  owner
+  member
+}
+
+model Organization {
+  id        String   @id @default(cuid())
+  name      String?
+  plan      Plan     @default(self_host)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  users             User[]
+  companyBrain      CompanyBrain?
+  agentRuns         AgentRun[]
+  drafts            Draft[]
+  contacts          Contact[]
+  contactLists      ContactList[]
+  connectorAccounts ConnectorAccount[]
+  syncRuns          SyncRun[]
+
+  @@map("organizations")
+}
+
+model User {
+  id        String   @id @default(cuid())
+  orgId     String
+  email     String   @db.Citext
+  role      UserRole @default(member)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  org    Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  voices Voice[]
+
+  @@unique([orgId, email])
+  @@index([email])
+  @@map("users")
+}
+
+// ============================================================================
+// Company Brain + Voice (per-channel — pass-1 Issue 4B-2)
+// ============================================================================
+
+model CompanyBrain {
+  id          String   @id @default(cuid())
+  orgId       String   @unique
+  icp         Json     @default("{}")
+  offer       Json     @default("{}")
+  productInfo Json     @default("{}")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  org    Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  voices Voice[]
+
+  @@map("company_brains")
+}
+
+enum VoiceChannel {
+  email
+  linkedin_dm
+  linkedin_post
+  twitter_post
+}
+
+model Voice {
+  id        String       @id @default(cuid())
+  brainId   String
+  userId    String
+  channel   VoiceChannel
+  signature Json         @default("{}") // sentence length, openings, banned phrases
+  bestPosts Json         @default("[]") // few-shot corpus (array of {channel, text, score})
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+
+  brain CompanyBrain @relation(fields: [brainId], references: [id], onDelete: Cascade)
+  user  User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([brainId, userId, channel])
+  @@map("voices")
+}
+
+// ============================================================================
+// Audit log — primary tables (eng-review pass-1: AgentRun + ToolCall + ModelCall + Citation)
+// ============================================================================
+
+enum RunStatus {
+  running
+  completed
+  failed
+  abstained
+}
+
+model AgentRun {
+  id            String    @id @default(cuid())
+  orgId         String
+  teammate      String // 'researcher' | 'sdr-drafter' | 'content-drafter' | ...
+  triggeredBy   String // userId or 'system'
+  status        RunStatus @default(running)
+  reason        String? // e.g. 'exceeded_maxToolCalls' (pass-1 Issue 6A)
+  inputContext  Json      @default("{}")
+  outputDraftId String?
+  startedAt     DateTime  @default(now())
+  completedAt   DateTime?
+  lastBeatAt    DateTime  @default(now()) // pass-1 Issue 2A — heartbeat for stale-run reaper
+  costCents     Int       @default(0)
+
+  org        Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  toolCalls  ToolCall[]
+  modelCalls ModelCall[]
+  citations  Citation[]
+  drafts     Draft[]
+
+  @@index([orgId, startedAt])
+  @@index([status, lastBeatAt]) // reaper query
+  @@map("agent_runs")
+}
+
+model ModelCall {
+  id           String   @id @default(cuid())
+  runId        String
+  modelName    String
+  inputTokens  Int
+  outputTokens Int
+  costCents    Int      @default(0)
+  at           DateTime @default(now())
+
+  run       AgentRun   @relation(fields: [runId], references: [id], onDelete: Cascade)
+  toolCalls ToolCall[]
+
+  @@index([runId])
+  @@map("model_calls")
+}
+
+model ToolCall {
+  id          String   @id @default(cuid())
+  runId       String
+  modelCallId String? // pass-1 Issue 6B — backref to API call that decided to invoke this tool
+  toolSeq     Int // pass-1 Issue 2A — idempotent inserts under (runId, toolSeq)
+  toolName    String
+  args        Json
+  result      Json // when result >50KB inline; otherwise: { type: 's3', key, preview: 'first 500 chars' } (Issue 2D)
+  durationMs  Int
+  costCents   Int      @default(0)
+  at          DateTime @default(now())
+
+  run       AgentRun   @relation(fields: [runId], references: [id], onDelete: Cascade)
+  modelCall ModelCall? @relation(fields: [modelCallId], references: [id], onDelete: SetNull)
+
+  @@unique([runId, toolSeq])
+  @@index([runId])
+  @@map("tool_calls")
+}
+
+model Citation {
+  id          String   @id @default(cuid())
+  runId       String
+  url         String
+  title       String?
+  excerpt     String?  @db.Text
+  retrievedAt DateTime @default(now())
+
+  run    AgentRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  claims Claim[]
+
+  @@index([runId])
+  @@index([url])
+  @@map("citations")
+}
+
+// ============================================================================
+// Drafts + Claims + TeammateConfig
+// ============================================================================
+
+enum DraftType {
+  email
+  linkedin_dm
+  linkedin_post
+  twitter_post
+  research_brief
+}
+
+enum DraftStatus {
+  pending
+  approved
+  rejected
+  edited
+  sent
+  partial // pass-2 D5 — some DraftActions succeeded, some dead-lettered
+  failed
+}
+
+model Draft {
+  id           String      @id @default(cuid())
+  orgId        String
+  teammate     String
+  runId        String?
+  type         DraftType
+  recipient    Json? // { contactId, email, name, ... } — soft FK to Contact via contactId
+  content      Json // { subject, body } | { content } | { headline, body } etc.
+  status       DraftStatus @default(pending)
+  approvedBy   String? // userId
+  approvedAt   DateTime?
+  editLog      Json        @default("[]") // every diff → few-shot for next run
+  scheduledFor DateTime?
+  postedAt     DateTime?
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
+
+  org     Organization  @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  run     AgentRun?     @relation(fields: [runId], references: [id], onDelete: SetNull)
+  claims  Claim[]
+  actions DraftAction[]
+
+  @@index([orgId, status])
+  @@index([orgId, createdAt])
+  @@map("drafts")
+}
+
+model Claim {
+  id         String   @id @default(cuid())
+  draftId    String
+  text       String   @db.Text
+  citationId String? // null only when abstained=true; runtime drops uncited claims at synthesis
+  confidence Float?
+  abstained  Boolean  @default(false)
+  createdAt  DateTime @default(now())
+
+  draft    Draft     @relation(fields: [draftId], references: [id], onDelete: Cascade)
+  citation Citation? @relation(fields: [citationId], references: [id], onDelete: SetNull)
+
+  @@index([draftId])
+  @@map("claims")
+}
+
+enum ApprovalPolicy {
+  draft_only
+  auto_above_confidence
+  autonomous
+}
+
+model TeammateConfig {
+  teammate           String         @id // 'researcher' | 'sdr-drafter' | 'content-drafter'
+  toolAllowlist      String[]
+  approvalPolicy     ApprovalPolicy @default(draft_only)
+  modelPrimary       String         @default("claude-sonnet-4-6")
+  modelFast          String         @default("claude-haiku-4-5-20251001")
+  defaultBudgetCents Int            @default(100)
+  maxToolCalls       Int            @default(25) // pass-1 Issue 6A
+  maxWallSecs        Int            @default(180)
+  maxParallelCalls   Int            @default(3)
+  updatedAt          DateTime       @updatedAt
+
+  @@map("teammate_configs")
+}
+
+// ============================================================================
+// Connector layer — pass-2 canonical (D2 / D3 / D4 / D6 / D9 + codex T2/T3/T4/T5)
+// ============================================================================
+
+enum ConnectorKind {
+  hubspot
+  salesforce
+  apollo
+  zoominfo
+  csv
+}
+
+enum AuthMode {
+  oauth
+  byo_key
+  upload
+}
+
+enum ConnectorStatus {
+  active
+  expired
+  revoked
+  error
+  circuit_broken
+}
+
+model ConnectorAccount {
+  id                 String          @id @default(cuid())
+  orgId              String
+  kind               ConnectorKind
+  authMode           AuthMode
+  credentials        Bytes // libsodium-sealed; decrypts only inside the adapter boundary
+  credentialsVersion Int             @default(1) // CAS on refresh-token rotation (D4 + codex T5)
+  scopes             String[]        @default([])
+  status             ConnectorStatus @default(active)
+  dailyBudgetCents   Int? // per-org cost cap for BYO-key vendors (codex T8)
+  lastSyncAt         DateTime?
+  lastError          String?         @db.Text
+  circuitOpenedAt    DateTime? // null unless status='circuit_broken'; reset after cooldown
+  createdAt          DateTime        @default(now())
+  updatedAt          DateTime        @updatedAt
+
+  org            Organization    @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  contactEmails  ContactEmail[]
+  contactSources ContactSource[]
+  syncRuns       SyncRun[]
+  draftActions   DraftAction[]
+
+  @@unique([orgId, kind])
+  @@map("connector_accounts")
+}
+
+// Canonical Contact (pass-2 D6) — normalized fields only.
+// Per-source data lives in ContactSource. Multiple emails via ContactEmail (codex T2).
+model Contact {
+  id              String    @id @default(cuid())
+  orgId           String
+  firstName       String?
+  lastName        String?
+  title           String?
+  company         String?
+  linkedinUrl     String?
+  normalizedEmail String?   @db.Citext // primary identity (D2). Lowercase, plus-stripped, subdomain-preserved. Null when no email.
+  fieldProvenance Json      @default("{}") // per-field: { title: {source, updatedAt}, ... } (D3 per-field, codex T4)
+  lastEditedAt    DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  org     Organization        @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  emails  ContactEmail[]
+  sources ContactSource[]
+  lists   ContactListMember[]
+
+  @@unique([orgId, normalizedEmail]) // primary identity constraint; NULL allowed, fallback to linkedinUrl
+  @@index([orgId, linkedinUrl]) // identity fallback when email missing
+  @@map("contacts")
+}
+
+model ContactEmail {
+  id              String   @id @default(cuid())
+  contactId       String
+  normalizedEmail String   @db.Citext
+  rawEmail        String
+  isPrimary       Boolean  @default(false)
+  sourceAccountId String? // ConnectorAccount that surfaced this email; null for manual entries
+  createdAt       DateTime @default(now())
+
+  contact       Contact           @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  sourceAccount ConnectorAccount? @relation(fields: [sourceAccountId], references: [id], onDelete: SetNull)
+
+  @@unique([contactId, normalizedEmail])
+  @@index([normalizedEmail])
+  @@map("contact_emails")
+}
+
+model ContactSource {
+  id                String   @id @default(cuid())
+  contactId         String
+  sourceAccountId   String
+  externalId        String
+  externalUrl       String?
+  rawPayload        Json // when ≤10KB inline; when >10KB: { type: 's3', key, sha256, preview } (D9 + codex T3)
+  rawPayloadVersion Int      @default(1) // CAS for retry/reconciliation
+  lastSyncedAt      DateTime @default(now())
+
+  contact       Contact          @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  sourceAccount ConnectorAccount @relation(fields: [sourceAccountId], references: [id], onDelete: Cascade)
+
+  @@unique([sourceAccountId, externalId])
+  @@index([contactId])
+  @@map("contact_sources")
+}
+
+model ContactList {
+  id           String   @id @default(cuid())
+  orgId        String
+  source       String // 'hubspot:list:xyz' | 'apollo:search:abc' | 'csv:upload:def'
+  name         String
+  contactCount Int      @default(0)
+  createdBy    String // userId
+  createdAt    DateTime @default(now())
+
+  org     Organization        @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  members ContactListMember[]
+
+  @@index([orgId])
+  @@map("contact_lists")
+}
+
+model ContactListMember {
+  listId    String
+  contactId String
+  addedAt   DateTime @default(now())
+
+  list    ContactList @relation(fields: [listId], references: [id], onDelete: Cascade)
+  contact Contact     @relation(fields: [contactId], references: [id], onDelete: Cascade)
+
+  @@id([listId, contactId])
+  @@index([contactId])
+  @@map("contact_list_members")
+}
+
+enum SyncDirection {
+  pull
+  push
+}
+
+enum SyncStatus {
+  running
+  completed
+  failed
+}
+
+model SyncRun {
+  id                 String        @id @default(cuid())
+  orgId              String
+  connectorAccountId String
+  direction          SyncDirection
+  status             SyncStatus    @default(running)
+  startedAt          DateTime      @default(now())
+  completedAt        DateTime?
+  recordsIn          Int           @default(0)
+  recordsOut         Int           @default(0)
+  errorCount         Int           @default(0)
+  cursor             String? // resumable; persisted before each batch commit
+  errors             Json          @default("[]")
+  costCents          Int           @default(0) // vendor per-call costs
+
+  org              Organization     @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  connectorAccount ConnectorAccount @relation(fields: [connectorAccountId], references: [id], onDelete: Cascade)
+
+  @@index([orgId, startedAt])
+  @@index([connectorAccountId, startedAt])
+  @@map("sync_runs")
+}
+
+// Outbox-style write-back actions (pass-2 D5 + codex T6)
+enum DraftActionKind {
+  send_email
+  post_linkedin
+  post_twitter
+  crm_log_activity
+  crm_update_field
+  archive
+}
+
+enum DraftActionStatus {
+  pending
+  running
+  succeeded
+  failed
+  dead_lettered
+}
+
+model DraftAction {
+  id                   String            @id @default(cuid())
+  draftId              String
+  kind                 DraftActionKind
+  targetAccountId      String? // ConnectorAccount.id for CRM writes; null for email/post via integration
+  payload              Json              @default("{}") // Zod-discriminated by kind (D7)
+  payloadSchemaVersion Int               @default(1) // validated at enqueue AND dequeue (D7 + codex T7)
+  dependsOnId          String? // self-FK — outbox state machine (D5)
+  status               DraftActionStatus @default(pending)
+  attempts             Int               @default(0) // 3 retries (1s/4s/16s) then dead_lettered
+  idempotencyKey       String            @default(uuid()) // CRM-write idempotency
+  responsePayload      Json?
+  executedAt           DateTime?
+  executedBy           String? // userId who approved
+  createdAt            DateTime          @default(now())
+  updatedAt            DateTime          @updatedAt
+
+  draft         Draft             @relation(fields: [draftId], references: [id], onDelete: Cascade)
+  targetAccount ConnectorAccount? @relation(fields: [targetAccountId], references: [id], onDelete: SetNull)
+  dependsOn     DraftAction?      @relation("DraftActionDependency", fields: [dependsOnId], references: [id], onDelete: SetNull)
+  dependents    DraftAction[]     @relation("DraftActionDependency")
+
+  @@index([status, dependsOnId]) // worker: ready-to-run = no dep OR dep.status='succeeded'
+  @@index([draftId])
+  @@index([idempotencyKey])
+  @@map("draft_actions")
+}

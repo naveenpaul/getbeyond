@@ -1,0 +1,29 @@
+{
+  "name": "getbeyond",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Open-source AI GTM teammates for solo founders. Audit every prompt, every claim, every source.",
+  "homepage": "https://getbeyond.ai",
+  "license": "AGPL-3.0-or-later",
+  "packageManager": "pnpm@9.12.0",
+  "engines": {
+    "node": ">=20.11.0",
+    "pnpm": ">=9.0.0"
+  },
+  "scripts": {
+    "dev": "turbo dev",
+    "build": "turbo build",
+    "lint": "turbo lint",
+    "test": "turbo test",
+    "typecheck": "turbo typecheck",
+    "depcruise": "depcruise apps packages",
+    "format": "prettier --write \"**/*.{ts,tsx,js,jsx,json,md}\""
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "dependency-cruiser": "^16.4.0",
+    "prettier": "^3.3.0",
+    "turbo": "^2.1.0",
+    "typescript": "^5.5.0"
+  }
+}
