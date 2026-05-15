@@ -54,6 +54,13 @@ export interface CsvSourceConfig {
   columnMapping: CsvColumnMapping;
   /** Optional callback fired for every row that can't produce a NormalizedContact. */
   onRowError?: (error: CsvRowError) => void;
+  /**
+   * Optional namespace for the generated externalId. Defaults to "csv".
+   * The import service sets this to "csv:run:{syncRunId}" so re-imports of
+   * the same CSV produce distinct ContactSource rows (each upload is its
+   * own logical snapshot, not an in-place update of the prior import).
+   */
+  externalIdNamespace?: string;
 }
 
 class CsvSourceAdapter implements SourceAdapter<CsvSourceConfig> {
@@ -96,9 +103,10 @@ class CsvSourceAdapter implements SourceAdapter<CsvSourceConfig> {
         continue;
       }
 
+      const namespace = config.externalIdNamespace ?? 'csv';
       const contact: NormalizedContact = {
         emailRaw,
-        externalId: `csv:row:${rowNum}`,
+        externalId: `${namespace}:row:${rowNum}`,
         firstName: pluckString(row, config.columnMapping.firstName),
         lastName: pluckString(row, config.columnMapping.lastName),
         title: pluckString(row, config.columnMapping.title),

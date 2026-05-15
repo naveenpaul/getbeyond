@@ -335,6 +335,35 @@ describe('csvSourceAdapter — empty + malformed inputs', () => {
   });
 });
 
+describe('csvSourceAdapter — externalIdNamespace', () => {
+  it('defaults to "csv" prefix when no namespace is given', async () => {
+    const csv = ['Email', 'a@x.com'].join('\n');
+    const contacts = await collect(
+      csvSourceAdapter.syncContacts({
+        creds: {},
+        config: { source: { kind: 'string', content: csv }, columnMapping: { email: 'Email' } },
+      }),
+    );
+    expect(contacts[0]!.externalId).toBe('csv:row:1');
+  });
+
+  it('uses the provided namespace as the externalId prefix', async () => {
+    const csv = ['Email', 'a@x.com', 'b@x.com'].join('\n');
+    const contacts = await collect(
+      csvSourceAdapter.syncContacts({
+        creds: {},
+        config: {
+          source: { kind: 'string', content: csv },
+          columnMapping: { email: 'Email' },
+          externalIdNamespace: 'csv:run:cm_abc123',
+        },
+      }),
+    );
+    expect(contacts[0]!.externalId).toBe('csv:run:cm_abc123:row:1');
+    expect(contacts[1]!.externalId).toBe('csv:run:cm_abc123:row:2');
+  });
+});
+
 describe('csvSourceAdapter — buffer source', () => {
   it('accepts Buffer input', async () => {
     const csv = 'Email\nsarah@acme.com\n';

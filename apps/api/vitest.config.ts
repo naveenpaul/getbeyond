@@ -39,6 +39,11 @@ export default defineConfig({
         // wiring — only meaningfully testable against a live Postgres.
         // Covered by 12 integration tests in contact-upsert.integration.spec.ts.
         'src/modules/contacts/contact-upsert.ts',
+        // End-to-end CSV import — Prisma-bound pipeline that wires the
+        // (100%-tested) CSV adapter into the (12-test-integration-covered)
+        // upsertContact, with SyncRun bookkeeping. Tested by 6 integration
+        // cases in csv-import.integration.spec.ts.
+        'src/modules/connectors/csv-import.service.ts',
       ],
       thresholds: {
         // CLAUDE.md: 95%+ line coverage on logic files.
