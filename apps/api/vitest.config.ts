@@ -44,6 +44,10 @@ export default defineConfig({
         // upsertContact, with SyncRun bookkeeping. Tested by 6 integration
         // cases in csv-import.integration.spec.ts.
         'src/modules/connectors/csv-import.service.ts',
+        // HTTP boundary — multipart parsing + ConnectorAccount validation
+        // around runCsvImport. Tested by 8 integration cases booting the
+        // full Nest+Fastify app in csv-import.controller.integration.spec.ts.
+        'src/modules/connectors/csv-import.controller.ts',
       ],
       thresholds: {
         // CLAUDE.md: 95%+ line coverage on logic files.

@@ -3,6 +3,7 @@ import { ConfigModule } from '@nestjs/config';
 import { AppController } from './app.controller';
 import { PrismaModule } from './common/prisma/prisma.module';
 import { OrgContextModule } from './common/org-context/org-context.module';
+import { ConnectorsModule } from './modules/connectors/connectors.module';
 
 @Module({
   imports: [
@@ -12,9 +13,10 @@ import { OrgContextModule } from './common/org-context/org-context.module';
     }),
     OrgContextModule,
     PrismaModule,
+    ConnectorsModule,
     // Feature modules land as we implement them:
     //   teammates (runtime + researcher + sdr-drafter + content-drafter)
-    //   company-brain, contacts, connectors, drafts, fetch, audit, auth, integrations
+    //   company-brain, contacts, drafts, fetch, audit, auth, integrations
   ],
   controllers: [AppController],
 })
