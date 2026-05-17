@@ -60,6 +60,21 @@ export default defineConfig({
         // Tested via the controller integration suite (S3 spill path exercises
         // put + get + delete end-to-end against the local MinIO container).
         'src/modules/storage/storage.service.ts',
+        // DraftAction worker — Prisma-bound orchestration that delegates to
+        // destination adapters. Tested by draft-action.worker.integration.spec.ts.
+        'src/modules/drafts/draft-action.worker.ts',
+        // Destination registry — same pattern as the connector registry but
+        // assembled around an injected PrismaService for the archive
+        // destination. Tested in the worker integration suite.
+        'src/modules/drafts/destination-registry.ts',
+        // ArchiveDestination is a thin wrapper around the per-action
+        // archive semantics. The Draft.status='rejected' transition lives
+        // in the worker (which owns the DraftAction context), not here.
+        // Worker integration tests cover the path end-to-end.
+        'src/modules/drafts/destinations/archive.destination.ts',
+        // EchoDestination is a test-only stub. Exists to give the worker
+        // something to call for every kind in non-production environments.
+        'src/modules/drafts/destinations/echo.destination.ts',
       ],
       thresholds: {
         // CLAUDE.md: 95%+ line coverage on logic files.

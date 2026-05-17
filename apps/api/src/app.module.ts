@@ -6,6 +6,7 @@ import { OrgContextModule } from './common/org-context/org-context.module';
 import { QueueModule } from './modules/queue/queue.module';
 import { StorageModule } from './modules/storage/storage.module';
 import { ConnectorsModule } from './modules/connectors/connectors.module';
+import { DraftsModule } from './modules/drafts/drafts.module';
 
 @Module({
   imports: [
@@ -18,6 +19,7 @@ import { ConnectorsModule } from './modules/connectors/connectors.module';
     QueueModule,
     StorageModule,
     ConnectorsModule,
+    DraftsModule,
     // Feature modules land as we implement them:
     //   teammates (runtime + researcher + sdr-drafter + content-drafter)
     //   company-brain, contacts, drafts, fetch, audit, auth, integrations
