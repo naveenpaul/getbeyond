@@ -139,7 +139,7 @@ describe.skipIf(!DATABASE_URL)(
         syncRunId: syncRun.id,
         orgId: orgA,
         sourceAccountId: csvAccountA,
-        csvBase64: Buffer.from(csv, 'utf8').toString('base64'),
+        csv: { kind: 'inline', base64: Buffer.from(csv, 'utf8').toString('base64') },
         columnMapping: { email: 'Email', firstName: 'First Name' },
         triggeredBy: 'usr_test',
       });
@@ -178,7 +178,7 @@ describe.skipIf(!DATABASE_URL)(
         syncRunId: syncRun.id,
         orgId: orgA,
         sourceAccountId: csvAccountA,
-        csvBase64: Buffer.from(csv, 'utf8').toString('base64'),
+        csv: { kind: 'inline', base64: Buffer.from(csv, 'utf8').toString('base64') },
         columnMapping: { email: 'Email' },
         triggeredBy: 'usr_test',
       });
@@ -205,7 +205,7 @@ describe.skipIf(!DATABASE_URL)(
         syncRunId: syncRun.id,
         orgId: orgA,
         sourceAccountId: csvAccountA,
-        csvBase64: Buffer.from(csv, 'utf8').toString('base64'),
+        csv: { kind: 'inline', base64: Buffer.from(csv, 'utf8').toString('base64') },
         columnMapping: { email: 'Email' },
         triggeredBy: 'usr_test',
       });

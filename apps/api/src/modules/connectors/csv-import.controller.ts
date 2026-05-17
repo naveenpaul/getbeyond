@@ -15,10 +15,20 @@ import {
 import type { FastifyRequest } from 'fastify';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { QueueService } from '../queue/queue.service';
+import { StorageService } from '../storage/storage.service';
 import {
   CSV_IMPORT_QUEUE,
   type CsvImportJobPayload,
+  type CsvImportSource,
 } from './csv-import.worker';
+
+/**
+ * Files at or below this size ride inline (base64) in the pg-boss job
+ * payload. Larger files get stashed in object storage and referenced by
+ * key. 1 MB keeps tiny dev / test uploads zero-hop while real uploads
+ * (which are mostly above 1 MB per real-world CSV sizes) route through S3.
+ */
+const INLINE_UPLOAD_THRESHOLD_BYTES = 1 * 1024 * 1024;
 import {
   CsvImportMetadataSchema,
   type CsvImportEnqueueResponse,
@@ -36,6 +46,7 @@ interface ParsedMultipart {
 export class CsvImportController {
   private readonly prisma: PrismaService;
   private readonly queue: QueueService;
+  private readonly storage: StorageService;
 
   // Explicit @Inject + manual assignment — see CLAUDE.md "NestJS dependency
   // injection — pitfall" for why parameter-property syntax breaks under
@@ -43,19 +54,22 @@ export class CsvImportController {
   constructor(
     @Inject(PrismaService) prisma: PrismaService,
     @Inject(QueueService) queue: QueueService,
+    @Inject(StorageService) storage: StorageService,
   ) {
     this.prisma = prisma;
     this.queue = queue;
+    this.storage = storage;
   }
 
   /**
    * Enqueue a CSV import job. Returns 202 + SyncRun id. Caller polls
    * GET /connectors/csv/sync-runs/:id for terminal status.
    *
-   * v1 phase 2 (T8-CSV.2c.2): CSV bytes travel inline as base64 inside the
-   * pg-boss job payload. Hard-capped at 5 MB by the multipart limit in
-   * main.ts. The next slice (T8-CSV.2c.3) routes >5 MB files through
-   * object storage and lifts the cap.
+   * Routing: files ≤ INLINE_UPLOAD_THRESHOLD_BYTES (1 MB) ride inline as
+   * base64 in the pg-boss payload. Files above the threshold spill to
+   * object storage (MinIO/S3) — the payload carries the S3 key, the
+   * worker fetches at execute time + deletes on success. The overall
+   * file-size ceiling is whatever the multipart adapter accepts (50 MB).
    */
   @Post('import')
   @HttpCode(202)
@@ -79,8 +93,19 @@ export class CsvImportController {
       );
     }
 
-    // Producer side: create the SyncRun synchronously so we can return its
-    // id, then hand the file off to the worker queue.
+    // S3 upload happens BEFORE SyncRun creation. If S3 is down, we fail fast
+    // without leaving an orphaned SyncRun in 'running'.
+    const csv: CsvImportSource =
+      fileBuffer.byteLength > INLINE_UPLOAD_THRESHOLD_BYTES
+        ? {
+            kind: 's3',
+            key: await this.storage.put(fileBuffer, {
+              prefix: 'csv-uploads',
+              contentType: 'text/csv',
+            }),
+          }
+        : { kind: 'inline', base64: fileBuffer.toString('base64') };
+
     const syncRun = await this.prisma.syncRun.create({
       data: {
         orgId: metadata.orgId,
@@ -94,7 +119,7 @@ export class CsvImportController {
       syncRunId: syncRun.id,
       orgId: metadata.orgId,
       sourceAccountId: metadata.sourceAccountId,
-      csvBase64: fileBuffer.toString('base64'),
+      csv,
       columnMapping: metadata.columnMapping,
       triggeredBy: metadata.triggeredBy,
     });
@@ -176,8 +201,7 @@ async function parseMultipart(req: FastifyRequest): Promise<ParsedMultipart> {
         fileBuffer = Buffer.concat(chunks);
         if (part.file.truncated) {
           throw new PayloadTooLargeException(
-            'CSV file exceeds the 5 MB inline-base64 cap. ' +
-              'Larger uploads route through object storage in a follow-up release.',
+            'CSV file exceeds the configured upload size limit (see main.ts CSV_UPLOAD_MAX_BYTES)',
           );
         }
       } else {

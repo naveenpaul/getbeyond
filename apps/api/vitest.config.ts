@@ -56,6 +56,10 @@ export default defineConfig({
         // Tested by csv-import.worker.integration.spec.ts (enqueue + assert
         // SyncRun terminal state).
         'src/modules/connectors/csv-import.worker.ts',
+        // S3/MinIO wrapper — framework wiring around @aws-sdk/client-s3.
+        // Tested via the controller integration suite (S3 spill path exercises
+        // put + get + delete end-to-end against the local MinIO container).
+        'src/modules/storage/storage.service.ts',
       ],
       thresholds: {
         // CLAUDE.md: 95%+ line coverage on logic files.

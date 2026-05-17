@@ -18,9 +18,19 @@ import type { CsvSyncRunStatusResponse } from './csv-import.dto';
  */
 
 const DATABASE_URL = process.env.DATABASE_URL;
-const POLL_TIMEOUT_MS = 10_000;
+const POLL_TIMEOUT_MS = 15_000;
 const POLL_INTERVAL_MS = 50;
-const MULTIPART_LIMIT_BYTES = 5 * 1024 * 1024;
+const MULTIPART_LIMIT_BYTES = 50 * 1024 * 1024;
+const INLINE_THRESHOLD_BYTES = 1 * 1024 * 1024;
+
+// Default the test env to the local MinIO from docker-compose. If the user
+// hasn't started MinIO (`docker compose up -d minio`), the S3-path test will
+// fail with a clear "ECONNREFUSED localhost:9000" instead of a mysterious
+// hang. The inline-path tests don't touch S3 and pass either way.
+process.env.S3_ENDPOINT ??= 'http://localhost:9000';
+process.env.S3_BUCKET ??= 'getbeyond-blobs';
+process.env.S3_ACCESS_KEY ??= 'minioadmin';
+process.env.S3_SECRET_KEY ??= 'minioadmin';
 
 describe.skipIf(!DATABASE_URL)(
   'POST /connectors/csv/import (async integration)',
@@ -291,9 +301,10 @@ describe.skipIf(!DATABASE_URL)(
       expect(res.json().message).toContain('hubspot');
     });
 
-    it('413 when CSV exceeds the 5 MB inline cap', async () => {
-      // Buffer larger than the multipart fileSize limit.
-      const oversized = Buffer.alloc(MULTIPART_LIMIT_BYTES + 1024, 0x61); // 'a' bytes
+    it('413 when CSV exceeds the multipart upload limit', async () => {
+      // Buffer larger than the multipart fileSize limit (50 MB in this run).
+      // Test allocates the smallest oversize possible (50 MB + 1 KB).
+      const oversized = Buffer.alloc(MULTIPART_LIMIT_BYTES + 1024, 0x61);
       const res = await postMultipart(oversized, {
         orgId: orgA,
         sourceAccountId: csvAccountA,
@@ -301,6 +312,42 @@ describe.skipIf(!DATABASE_URL)(
         columnMapping: { email: 'Email' },
       });
       expect(res.statusCode).toBe(413);
+    });
+
+    it('S3 spill: files >1 MB route through object storage, worker hydrates from S3', async () => {
+      // Header + 2 valid rows + a third row with a 1.2 MB pad column. Total
+      // payload is comfortably above the 1 MB inline threshold so the
+      // controller spills to S3. The CSV still parses to 3 contacts.
+      const pad = 'x'.repeat(1_200_000);
+      const csv = [
+        'Email,Notes',
+        'sarah@acme.com,short',
+        'tom@beta.com,short',
+        `priya@gamma.org,${pad}`,
+      ].join('\n');
+      expect(csv.length).toBeGreaterThan(INLINE_THRESHOLD_BYTES);
+
+      const postRes = await postMultipart(csv, {
+        orgId: orgA,
+        sourceAccountId: csvAccountA,
+        triggeredBy: 'usr_test',
+        columnMapping: { email: 'Email' },
+      });
+      expect(postRes.statusCode).toBe(202);
+      const { syncRunId } = postRes.json() as { syncRunId: string };
+
+      const final = await pollSyncRunUntilDone(syncRunId, orgA);
+      expect(final.status).toBe('completed');
+      expect(final.recordsOut).toBe(3);
+      expect(final.errorCount).toBe(0);
+
+      const contacts = await prisma.contact.findMany({ where: { orgId: orgA } });
+      expect(contacts).toHaveLength(3);
+      expect(contacts.map((c) => c.normalizedEmail).sort()).toEqual([
+        'priya@gamma.org',
+        'sarah@acme.com',
+        'tom@beta.com',
+      ]);
     });
 
     // ─── GET /connectors/csv/sync-runs/:id ─────────────────────────────
