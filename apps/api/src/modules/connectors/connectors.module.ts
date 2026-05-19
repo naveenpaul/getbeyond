@@ -6,11 +6,17 @@ import { CredentialManager } from './credential-manager';
 import { CsvImportController } from './csv-import.controller';
 import { CsvImportWorker } from './csv-import.worker';
 import { HubspotOauthController } from './hubspot-oauth.controller';
+import { HubspotSyncController } from './hubspot-sync.controller';
+import { HubspotSyncWorker } from './hubspot-sync.worker';
 
 @Module({
   imports: [PrismaModule, QueueModule, StorageModule],
-  controllers: [CsvImportController, HubspotOauthController],
-  providers: [CsvImportWorker, CredentialManager],
+  controllers: [
+    CsvImportController,
+    HubspotOauthController,
+    HubspotSyncController,
+  ],
+  providers: [CsvImportWorker, CredentialManager, HubspotSyncWorker],
   exports: [CredentialManager],
 })
 export class ConnectorsModule {}
