@@ -1,4 +1,8 @@
 import { Injectable, Logger } from '@nestjs/common';
+import {
+  TERMINAL_RUN_EVENT_TYPES,
+  type RunEvent,
+} from '@getbeyond/shared';
 
 /**
  * Run-event bus for live progress streaming (T4e.1).
@@ -24,96 +28,8 @@ import { Injectable, Logger } from '@nestjs/common';
  *     under 50 events per run.
  */
 
-// ─── Event types ────────────────────────────────────────────────────
-
-export type RunEventType =
-  | 'model_call_started'
-  | 'model_call_completed'
-  | 'tool_call_started'
-  | 'tool_call_completed'
-  | 'draft_emitted'
-  | 'run_completed'
-  | 'run_abstained'
-  | 'run_failed';
-
-interface BaseRunEvent {
-  /** AgentRun.id this event belongs to. */
-  runId: string;
-  /** ISO-8601 timestamp set when the event is published. */
-  at: string;
-}
-
-export type RunEvent =
-  | (BaseRunEvent & {
-      type: 'model_call_started';
-      data: { modelName: string; turn: number };
-    })
-  | (BaseRunEvent & {
-      type: 'model_call_completed';
-      data: {
-        modelCallId: string;
-        modelName: string;
-        inputTokens: number;
-        outputTokens: number;
-        costCents: number;
-        /** Total cost of the run including this call. */
-        runCostCents: number;
-      };
-    })
-  | (BaseRunEvent & {
-      type: 'tool_call_started';
-      data: {
-        toolName: string;
-        toolSeq: number;
-        args: unknown;
-      };
-    })
-  | (BaseRunEvent & {
-      type: 'tool_call_completed';
-      data: {
-        toolName: string;
-        toolSeq: number;
-        durationMs: number;
-        isError: boolean;
-        /** Short summary for UI display (e.g. URL fetched, results count). */
-        summary?: string;
-      };
-    })
-  | (BaseRunEvent & {
-      type: 'draft_emitted';
-      data: {
-        draftId: string;
-        persistedClaimCount: number;
-        droppedUncitedCount: number;
-        droppedDanglingCount: number;
-      };
-    })
-  | (BaseRunEvent & {
-      type: 'run_completed';
-      data: {
-        draftId: string;
-        costCents: number;
-        toolCallCount: number;
-      };
-    })
-  | (BaseRunEvent & {
-      type: 'run_abstained';
-      data: {
-        reason: string;
-        costCents: number;
-        toolCallCount: number;
-      };
-    })
-  | (BaseRunEvent & {
-      type: 'run_failed';
-      data: { message: string };
-    });
-
-const TERMINAL_TYPES: ReadonlySet<RunEventType> = new Set([
-  'run_completed',
-  'run_abstained',
-  'run_failed',
-]);
+// Re-export the event types so existing internal call sites keep working.
+export type { RunEvent, RunEventType } from '@getbeyond/shared';
 
 const BUFFER_CLEANUP_MS = 60_000;
 
@@ -163,7 +79,7 @@ export class InMemoryRunEventBus implements RunEventBus {
       }
     }
 
-    if (TERMINAL_TYPES.has(event.type)) {
+    if (TERMINAL_RUN_EVENT_TYPES.has(event.type)) {
       this.scheduleCleanup(event.runId);
     }
   }

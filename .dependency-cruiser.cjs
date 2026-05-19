@@ -66,7 +66,14 @@ module.exports = {
           '(^|/)vitest\\.config\\.ts$',
           '(^|/)vitest\\.integration\\.config\\.ts$',
           '(^|/)vite\\.config\\.ts$',
+          '(^|/)next\\.config\\.(js|cjs|mjs|ts)$',
+          '(^|/)postcss\\.config\\.(js|cjs|mjs|ts)$',
+          '(^|/)tailwind\\.config\\.(js|cjs|mjs|ts)$',
           'main\\.ts$',
+          // Path-alias imports (`@/lib/utils` from shadcn components) aren't
+          // followed by depcruise's tsconfig.base.json resolver, so utilities
+          // used only through the alias look like orphans. They're not.
+          '^apps/web/src/lib/utils\\.ts$',
         ],
       },
       to: {},

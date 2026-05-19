@@ -16,7 +16,8 @@
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
     "prisma:studio": "prisma studio",
-    "prisma:format": "prisma format"
+    "prisma:format": "prisma format",
+    "seed:dev": "ts-node --transpile-only scripts/seed-dev.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.30.0",

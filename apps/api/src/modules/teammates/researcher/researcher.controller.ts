@@ -18,9 +18,12 @@ import { PrismaService } from '../../../common/prisma/prisma.service';
 import { QueueService } from '../../queue/queue.service';
 import {
   RUN_EVENT_BUS,
-  type RunEvent,
   type RunEventBus,
 } from '../runtime/run-event-bus';
+import {
+  TERMINAL_RUN_EVENT_TYPES,
+  type RunEvent,
+} from '@getbeyond/shared';
 import { RESEARCHER_NAME } from './researcher.service';
 import {
   RESEARCHER_RUN_QUEUE,
@@ -33,11 +36,6 @@ import {
 } from './researcher.dto';
 
 const SSE_HEARTBEAT_MS = 15_000;
-const TERMINAL_EVENT_TYPES: ReadonlySet<RunEvent['type']> = new Set([
-  'run_completed',
-  'run_abstained',
-  'run_failed',
-]);
 
 /**
  * Researcher HTTP endpoints (T4d.2).
@@ -239,7 +237,7 @@ export class ResearcherController {
         if (delivered.has(key)) return;
         delivered.add(key);
         subscriber.next({ type: event.type, data: event });
-        if (TERMINAL_EVENT_TYPES.has(event.type)) terminate();
+        if (TERMINAL_RUN_EVENT_TYPES.has(event.type)) terminate();
       };
 
       // Replay buffer first, then subscribe to live events.
@@ -250,7 +248,7 @@ export class ResearcherController {
       // in the replay buffer (it aged out of the 60s window), synthesize
       // one from the row so the client doesn't wait forever.
       const replayHasTerminal = [...delivered].some((key) =>
-        Array.from(TERMINAL_EVENT_TYPES).some((t) => key.startsWith(`${t}|`)),
+        Array.from(TERMINAL_RUN_EVENT_TYPES).some((t) => key.startsWith(`${t}|`)),
       );
       if (
         (runStatus === 'completed' ||

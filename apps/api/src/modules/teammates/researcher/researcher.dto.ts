@@ -1,7 +1,18 @@
 import { z } from 'zod';
+import type {
+  ResearcherRunEnqueueResponse,
+  ResearcherRunRequest,
+  ResearcherRunStatusResponse,
+} from '@getbeyond/shared';
 
 /**
- * POST /teammates/researcher/run request body.
+ * POST /teammates/researcher/run request body — Zod validator.
+ *
+ * The public *type* lives in @getbeyond/shared so the
+ * web client + Chrome extension + third-party clients import it without
+ * pulling in the API package. This file binds the Zod runtime to the same
+ * shape via the `satisfies` checker below — a drift on either side fails
+ * the build instead of leaking past tests.
  *
  * Pre-auth stub: orgId + triggeredBy live in the body. When real auth
  * lands, both come from OrgContext and the DTO shrinks to { target }.
@@ -11,39 +22,12 @@ export const ResearcherRunRequestSchema = z.object({
   triggeredBy: z.string().min(1, 'triggeredBy is required'),
   target: z.string().min(1, 'target is required'),
   budgetCents: z.number().int().min(1).max(10_000).optional(),
-});
-export type ResearcherRunRequest = z.infer<typeof ResearcherRunRequestSchema>;
+}) satisfies z.ZodType<ResearcherRunRequest>;
 
-/** Returned by POST /teammates/researcher/run. 202 Accepted. */
-export interface ResearcherRunEnqueueResponse {
-  runId: string;
-  status: 'running';
-}
-
-/**
- * Returned by GET /teammates/researcher/runs/:id. Caller polls until
- * status is terminal (`completed | abstained | failed`).
- */
-export interface ResearcherRunStatusResponse {
-  runId: string;
-  status: 'running' | 'completed' | 'abstained' | 'failed';
-  reason: string | null;
-  startedAt: string;
-  completedAt: string | null;
-  costCents: number;
-  toolCallCount: number;
-  /** Present once status=completed; null otherwise. */
-  draft: {
-    id: string;
-    type: string;
-    content: unknown;
-    claims: Array<{
-      id: string;
-      text: string;
-      citationId: string | null;
-      citationUrl: string | null;
-      abstained: boolean;
-      confidence: number | null;
-    }>;
-  } | null;
-}
+// Re-export the public types so existing API call sites that imported them
+// from this file keep working.
+export type {
+  ResearcherRunEnqueueResponse,
+  ResearcherRunRequest,
+  ResearcherRunStatusResponse,
+};
