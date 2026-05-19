@@ -6,14 +6,19 @@ import {
   UnknownConnectorError,
 } from './registry';
 import { csvSourceAdapter } from './adapters/csv.source';
+import { hubspotSourceAdapter } from './adapters/hubspot.source';
 
 describe('source-adapter registry', () => {
   it('returns the CSV adapter for kind=csv', () => {
     expect(getSourceAdapter('csv')).toBe(csvSourceAdapter);
   });
 
+  it('returns the HubSpot adapter for kind=hubspot', () => {
+    expect(getSourceAdapter('hubspot')).toBe(hubspotSourceAdapter);
+  });
+
   it('throws UnknownConnectorError for kinds not yet registered', () => {
-    for (const kind of ['hubspot', 'salesforce', 'apollo', 'zoominfo'] as const) {
+    for (const kind of ['salesforce', 'apollo', 'zoominfo'] as const) {
       try {
         getSourceAdapter(kind);
         expect.fail(`should have thrown for ${kind}`);
@@ -26,18 +31,21 @@ describe('source-adapter registry', () => {
 
   it('UnknownConnectorError message names the missing kind', () => {
     try {
-      getSourceAdapter('hubspot');
+      getSourceAdapter('salesforce');
     } catch (err) {
-      expect((err as Error).message).toContain('hubspot');
+      expect((err as Error).message).toContain('salesforce');
     }
   });
 
   it('isRegisteredSource reflects registry state', () => {
     expect(isRegisteredSource('csv')).toBe(true);
-    expect(isRegisteredSource('hubspot')).toBe(false);
+    expect(isRegisteredSource('hubspot')).toBe(true);
+    expect(isRegisteredSource('salesforce')).toBe(false);
+    expect(isRegisteredSource('apollo')).toBe(false);
+    expect(isRegisteredSource('zoominfo')).toBe(false);
   });
 
   it('listRegisteredSources returns only the connectors that are wired', () => {
-    expect(listRegisteredSources()).toEqual(['csv']);
+    expect(listRegisteredSources().sort()).toEqual(['csv', 'hubspot']);
   });
 });

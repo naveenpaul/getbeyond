@@ -511,3 +511,32 @@ model DraftAction {
   @@index([idempotencyKey])
   @@map("draft_actions")
 }
+
+// ============================================================================
+// OAuth — short-lived state token bridging /start → /callback (T3c.1)
+// ============================================================================
+//
+// Why a table (not a cookie or in-memory map):
+//   - Survives API process restart (real OAuth flows redirect off-site for
+//     ~30-60s; in-memory state evaporates on deploy).
+//   - Horizontal scaling — two API instances behind a load balancer share state.
+//   - Auditable — replay attempts and expired uses are visible.
+//
+// TTL: 10 min. OAuthStateReaper sweeps expired rows on a 2-min cadence.
+// One-shot: rows are deleted on consumption (callback success/fail both delete)
+// so replay attacks land on "state not found", not stale-but-valid.
+
+model OAuthState {
+  id          String        @id @default(cuid())
+  state       String // opaque random token the vendor echoes back on callback
+  orgId       String
+  kind        ConnectorKind // which adapter started this flow
+  redirectUri String // the exact redirect_uri passed to the vendor; vendor will reject mismatch
+  expiresAt   DateTime
+  createdAt   DateTime      @default(now())
+
+  @@unique([state]) // primary lookup on callback
+  @@index([expiresAt]) // reaper sweep
+  @@index([orgId, kind]) // stuck-flow surfacing
+  @@map("oauth_states")
+}

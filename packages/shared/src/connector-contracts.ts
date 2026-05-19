@@ -122,6 +122,36 @@ export interface SyncContactsParams<TConfig> {
    * their next-page token here; on retry the runtime hands it back.
    */
   cursor?: string;
+  /**
+   * OAuth-only: invoked by the adapter when the vendor rejects its current
+   * access token (typically HTTP 401). The adapter supplies a `refresher`
+   * that knows how to talk to the vendor's token endpoint; the runtime
+   * wraps the call with singleflight + CAS on `credentialsVersion` and
+   * persists the new credentials. The adapter then retries the failed
+   * request with the returned credentials.
+   *
+   * The `refresher` MUST throw the runtime's `RefreshRejectedError`
+   * (re-exported from `apps/api/src/modules/connectors/credential-manager.ts`)
+   * when the vendor rejects the refresh token (HTTP 400 on /oauth/v1/token).
+   * That triggers the account → `expired` transition.
+   *
+   * Omit for adapters that don't need OAuth refresh (CSV, BYO-key).
+   */
+  onAuthExpired?: (
+    refresher: (current: DecryptedCredentials) => Promise<CredentialUpdate>,
+  ) => Promise<DecryptedCredentials>;
+  /**
+   * Feed the runtime's circuit breaker. Call on vendor 5xx; call with
+   * 'auth_invalid' when the vendor still rejects the token after a fresh
+   * refresh (rare but possible — corrupted refresh, vendor-side desync).
+   */
+  onVendorFailure?: (kind: 'server_5xx' | 'auth_invalid') => Promise<void>;
+  /**
+   * Call after each successful vendor response. Clears the in-memory
+   * circuit breaker's failure window so transient 5xx blips don't
+   * accumulate over long-running syncs.
+   */
+  onVendorSuccess?: () => void;
 }
 
 /**
@@ -142,8 +172,16 @@ export interface SourceAdapter<TConfig = unknown> {
   /** OAuth-only. Builds the consent URL; runtime persists state and redirects. */
   startOAuth?(redirectUri: string): OAuthStart;
 
-  /** OAuth-only. Exchanges the code for credentials. State already verified. */
-  completeOAuth?(code: string, state: string): Promise<DecryptedCredentials>;
+  /**
+   * OAuth-only. Exchanges the code for credentials. State is already verified
+   * by the runtime; `redirectUri` is passed back through (vendors typically
+   * require it to match what was used during /authorize for CSRF parity).
+   */
+  completeOAuth?(
+    code: string,
+    state: string,
+    redirectUri: string,
+  ): Promise<DecryptedCredentials>;
 
   /** Verify the connection works. Cheap to call. Used at setup + on schedule. */
   ping(creds: DecryptedCredentials): Promise<PingResult>;

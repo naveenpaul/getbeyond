@@ -8,6 +8,7 @@ import { PrismaClient } from '@prisma/client';
 import { AppModule } from '../../app.module';
 import { SyncRunReaper } from './sync-run.reaper';
 import { DraftActionReaper } from './draft-action.reaper';
+import { OAuthStateReaper } from './oauth-state.reaper';
 import { CURRENT_PAYLOAD_SCHEMA_VERSION } from '../drafts/draft-action.schemas';
 
 const DATABASE_URL = process.env.DATABASE_URL;
@@ -19,6 +20,7 @@ describe.skipIf(!DATABASE_URL)(
     let prisma: PrismaClient;
     let syncRunReaper: SyncRunReaper;
     let draftActionReaper: DraftActionReaper;
+    let oauthStateReaper: OAuthStateReaper;
     let orgA: string;
     let csvAccountA: string;
     let draftId: string;
@@ -42,6 +44,7 @@ describe.skipIf(!DATABASE_URL)(
 
       syncRunReaper = app.get(SyncRunReaper);
       draftActionReaper = app.get(DraftActionReaper);
+      oauthStateReaper = app.get(OAuthStateReaper);
 
       prisma = new PrismaClient({
         datasources: { db: { url: DATABASE_URL! } },
@@ -59,7 +62,7 @@ describe.skipIf(!DATABASE_URL)(
         TRUNCATE TABLE
           draft_actions, claims, drafts,
           contact_sources, contact_emails, contact_list_members, contact_lists,
-          contacts, sync_runs, connector_accounts,
+          contacts, sync_runs, oauth_states, connector_accounts,
           tool_calls, model_calls, citations, agent_runs,
           voices, company_brains, users, organizations
         RESTART IDENTITY CASCADE
@@ -264,6 +267,69 @@ describe.skipIf(!DATABASE_URL)(
         where: { id: succeeded.id },
       });
       expect(reloaded?.status).toBe('succeeded');
+    });
+
+    // ─── OAuthStateReaper ──────────────────────────────────────────────
+
+    it('OAuthStateReaper deletes rows whose expiresAt has passed', async () => {
+      const expired = await prisma.oAuthState.create({
+        data: {
+          state: 'state-expired',
+          orgId: orgA,
+          kind: 'hubspot',
+          redirectUri: 'https://app.example/cb',
+          expiresAt: new Date(Date.now() - 5 * 60 * 1000), // 5 min ago
+        },
+      });
+
+      const reaped = await oauthStateReaper.reap();
+      expect(reaped).toBeGreaterThanOrEqual(1);
+
+      const reloaded = await prisma.oAuthState.findUnique({
+        where: { id: expired.id },
+      });
+      expect(reloaded).toBeNull();
+    });
+
+    it('OAuthStateReaper leaves rows whose expiresAt is in the future', async () => {
+      const live = await prisma.oAuthState.create({
+        data: {
+          state: 'state-live',
+          orgId: orgA,
+          kind: 'hubspot',
+          redirectUri: 'https://app.example/cb',
+          expiresAt: new Date(Date.now() + 10 * 60 * 1000), // 10 min from now
+        },
+      });
+
+      await oauthStateReaper.reap();
+
+      const reloaded = await prisma.oAuthState.findUnique({
+        where: { id: live.id },
+      });
+      expect(reloaded?.state).toBe('state-live');
+    });
+
+    it('OAuthStateReaper accepts an injected clock for fast tests', async () => {
+      const future = await prisma.oAuthState.create({
+        data: {
+          state: 'state-future-clock',
+          orgId: orgA,
+          kind: 'hubspot',
+          redirectUri: 'https://app.example/cb',
+          expiresAt: new Date(Date.now() + 60 * 1000), // 1 min from real now
+        },
+      });
+
+      // Advance the clock 5 min — the row is now expired relative to `now`.
+      const advancedNow = new Date(Date.now() + 5 * 60 * 1000);
+      const reaped = await oauthStateReaper.reap(advancedNow);
+      expect(reaped).toBeGreaterThanOrEqual(1);
+
+      const reloaded = await prisma.oAuthState.findUnique({
+        where: { id: future.id },
+      });
+      expect(reloaded).toBeNull();
     });
   },
 );

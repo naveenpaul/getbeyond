@@ -1,5 +1,6 @@
 import type { ConnectorKind, SourceAdapter } from '@getbeyond/shared';
 import { csvSourceAdapter } from './adapters/csv.source';
+import { hubspotSourceAdapter } from './adapters/hubspot.source';
 
 /**
  * Source-adapter registry (eng-review pass-2 adapter architecture section).
@@ -17,7 +18,8 @@ import { csvSourceAdapter } from './adapters/csv.source';
 const SOURCE_ADAPTERS: Partial<Record<ConnectorKind, SourceAdapter<unknown>>> =
   {
     csv: csvSourceAdapter as SourceAdapter<unknown>,
-    // hubspot, salesforce, apollo, zoominfo land in T3c + T8.
+    hubspot: hubspotSourceAdapter as SourceAdapter<unknown>,
+    // salesforce, apollo, zoominfo land in T8.
   };
 
 export class UnknownConnectorError extends Error {
