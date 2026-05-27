@@ -2,9 +2,8 @@
 
 import { use, useEffect, useState } from 'react';
 import Link from 'next/link';
-import { ArrowLeft, PenLine } from 'lucide-react';
-import type { ResearcherRunStatusResponse } from '@getbeyond/shared';
-import { Button } from '@/components/ui/button';
+import { ArrowLeft } from 'lucide-react';
+import type { SdrDrafterRunStatusResponse } from '@getbeyond/shared';
 import {
   Card,
   CardContent,
@@ -12,30 +11,31 @@ import {
   CardTitle,
 } from '@/components/ui/card';
 import { ResearchRunStream } from '@/components/ResearchRunStream';
-import { ResearchDraftCard } from '@/components/ResearchDraftCard';
-import { ApiError, getResearchRun } from '@/lib/api-client';
-import { useResearchStream } from '@/lib/use-research-stream';
+import { SdrDraftCard } from '@/components/SdrDraftCard';
+import {
+  ApiError,
+  buildSdrDrafterStreamUrl,
+  getSdrDrafterRun,
+} from '@/lib/api-client';
+import { useAgentStream } from '@/lib/use-agent-stream';
 
 /**
- * Run detail page (T5.4 → T6.4 → T7).
- *
- * Subscribes to the SSE stream to render live progress. Once a terminal
- * event arrives, fires a single GET /runs/:id to fetch the persisted
- * Draft (with claims + citation URLs joined) for inline display.
- *
- * Identity is resolved server-side from the session cookie; middleware
- * ensures /research/** is only reachable after sign-in.
+ * SDR Drafter run detail. Same shape as the Researcher detail page —
+ * live SSE feed via ResearchRunStream, then GET snapshot once terminal,
+ * then render the email draft.
  */
-export default function ResearchRunPage({
+export default function SdrDrafterRunPage({
   params,
 }: {
   params: Promise<{ runId: string }>;
 }): React.JSX.Element {
   const { runId } = use(params);
 
-  const { events, connectionState, terminated } = useResearchStream({ runId });
+  const { events, connectionState, terminated } = useAgentStream({
+    streamUrl: buildSdrDrafterStreamUrl(runId),
+  });
 
-  const [snapshot, setSnapshot] = useState<ResearcherRunStatusResponse | null>(
+  const [snapshot, setSnapshot] = useState<SdrDrafterRunStatusResponse | null>(
     null,
   );
   const [snapshotError, setSnapshotError] = useState<string | null>(null);
@@ -45,7 +45,7 @@ export default function ResearchRunPage({
     let cancelled = false;
     (async () => {
       try {
-        const result = await getResearchRun(runId);
+        const result = await getSdrDrafterRun(runId);
         if (!cancelled) setSnapshot(result);
       } catch (err) {
         if (cancelled) return;
@@ -66,17 +66,17 @@ export default function ResearchRunPage({
   return (
     <main className="container space-y-6 py-12">
       <Link
-        href="/research/new"
+        href="/draft/sdr/new"
         className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
       >
         <ArrowLeft className="h-3.5 w-3.5" />
-        New run
+        New draft
       </Link>
 
       <Card>
         <CardHeader>
           <CardTitle className="flex items-baseline justify-between">
-            <span>Research run</span>
+            <span>SDR draft</span>
             <span className="font-mono text-xs text-muted-foreground">
               {runId}
             </span>
@@ -96,21 +96,7 @@ export default function ResearchRunPage({
         </div>
       ) : null}
 
-      {snapshot?.draft ? (
-        <>
-          <ResearchDraftCard draft={snapshot.draft} />
-          <div className="flex justify-end">
-            <Button asChild>
-              <Link
-                href={`/draft/sdr/new?brief=${encodeURIComponent(snapshot.draft.id)}`}
-              >
-                <PenLine className="h-3.5 w-3.5" />
-                Draft outreach using this brief
-              </Link>
-            </Button>
-          </div>
-        </>
-      ) : null}
+      {snapshot?.draft ? <SdrDraftCard draft={snapshot.draft} /> : null}
     </main>
   );
 }

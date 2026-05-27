@@ -104,6 +104,15 @@ export async function persistDraftFromEmitArgs(
     orgId: string;
     teammate: string;
     args: EmitDraftArgs;
+    /**
+     * Optional recipient — Drafters that target a specific Contact pass this.
+     * The Researcher omits it (research briefs aren't to-anyone).
+     */
+    recipient?: {
+      contactId: string;
+      email: string;
+      name?: string | null;
+    } | null;
   },
 ): Promise<ClaimPersistenceResult> {
   // Whitelist of citation IDs created during this run. Used to reject
@@ -151,6 +160,9 @@ export async function persistDraftFromEmitArgs(
         runId: params.runId,
         type: params.args.type,
         content: params.args.content as Prisma.InputJsonValue,
+        recipient: params.recipient
+          ? (params.recipient as unknown as Prisma.InputJsonValue)
+          : undefined,
         status: 'pending',
         claims: {
           create: surviving.map((c) => ({

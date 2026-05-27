@@ -70,6 +70,16 @@ export interface RunAgentParams {
    * existing call sites working without changes.
    */
   emitEvent?: (event: RunEvent) => void;
+  /**
+   * Recipient threaded to emit_draft. Drafter teammates that target a
+   * specific Contact set this so the resulting Draft.recipient is populated.
+   * Researcher omits it.
+   */
+  draftRecipient?: {
+    contactId: string;
+    email: string;
+    name?: string | null;
+  } | null;
 }
 
 export interface RunAgentResult {
@@ -205,6 +215,7 @@ export async function runAgent(params: RunAgentParams): Promise<RunAgentResult> 
           runId: params.runId,
           now,
           emitEvent: params.emitEvent,
+          draftRecipient: params.draftRecipient ?? null,
         }),
       ),
     );
@@ -268,6 +279,11 @@ async function dispatchOneToolUse(params: {
   runId: string;
   now: () => number;
   emitEvent?: (event: RunEvent) => void;
+  draftRecipient?: {
+    contactId: string;
+    email: string;
+    name?: string | null;
+  } | null;
 }): Promise<ToolDispatchOutcome> {
   const { toolUse } = params;
 
@@ -292,6 +308,7 @@ async function dispatchOneToolUse(params: {
       toolSeq: params.toolSeq,
       modelCallId: params.modelCallId,
       emitEvent: params.emitEvent,
+      draftRecipient: params.draftRecipient ?? null,
     });
     params.emitEvent?.({
       type: 'tool_call_completed',
@@ -430,6 +447,11 @@ async function handleEmitDraft(params: {
   toolSeq: number;
   modelCallId: string;
   emitEvent?: (event: RunEvent) => void;
+  draftRecipient?: {
+    contactId: string;
+    email: string;
+    name?: string | null;
+  } | null;
 }): Promise<
   | { status: 'completed'; draftId: string }
   | { status: 'retry'; modelMessage: string }
@@ -461,6 +483,7 @@ async function handleEmitDraft(params: {
       orgId: params.orgId,
       teammate: params.teammate,
       args: parsed.data,
+      recipient: params.draftRecipient ?? null,
     });
     await persistToolCall(params.prisma, {
       runId: params.runId,

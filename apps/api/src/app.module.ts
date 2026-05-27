@@ -7,6 +7,7 @@ import { QueueModule } from './modules/queue/queue.module';
 import { StorageModule } from './modules/storage/storage.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { ConnectorsModule } from './modules/connectors/connectors.module';
+import { ContactsModule } from './modules/contacts/contacts.module';
 import { DraftsModule } from './modules/drafts/drafts.module';
 import { InvitesModule } from './modules/invites/invites.module';
 import { ReapersModule } from './modules/reapers/reapers.module';
@@ -24,6 +25,7 @@ import { TeammatesModule } from './modules/teammates/teammates.module';
     StorageModule,
     AuthModule,
     ConnectorsModule,
+    ContactsModule,
     DraftsModule,
     InvitesModule,
     ReapersModule,

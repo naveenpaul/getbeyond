@@ -12,6 +12,8 @@ import {
 } from './runtime/run-event-bus';
 import { ResearcherController } from './researcher/researcher.controller';
 import { ResearcherWorker } from './researcher/researcher.worker';
+import { SdrDrafterController } from './sdr-drafter/sdr-drafter.controller';
+import { SdrDrafterWorker } from './sdr-drafter/sdr-drafter.worker';
 
 /**
  * Teammates module — wires the Anthropic SDK singleton and registers all
@@ -23,7 +25,7 @@ import { ResearcherWorker } from './researcher/researcher.worker';
  */
 @Module({
   imports: [PrismaModule, QueueModule, AuthModule],
-  controllers: [ResearcherController],
+  controllers: [ResearcherController, SdrDrafterController],
   providers: [
     {
       provide: ANTHROPIC_CLIENT,
@@ -35,6 +37,7 @@ import { ResearcherWorker } from './researcher/researcher.worker';
       useClass: InMemoryRunEventBus,
     },
     ResearcherWorker,
+    SdrDrafterWorker,
   ],
   exports: [ANTHROPIC_CLIENT, RUN_EVENT_BUS],
 })

@@ -2,6 +2,9 @@ import type {
   ResearcherRunEnqueueResponse,
   ResearcherRunRequest,
   ResearcherRunStatusResponse,
+  SdrDrafterRunEnqueueResponse,
+  SdrDrafterRunRequest,
+  SdrDrafterRunStatusResponse,
 } from '@getbeyond/shared';
 import { env } from './env';
 
@@ -59,6 +62,53 @@ export async function getResearchRun(
 
 export function buildResearchStreamUrl(runId: string): string {
   return `${env.apiUrl}/teammates/researcher/runs/${encodeURIComponent(runId)}/stream`;
+}
+
+// ─── SDR Drafter ──────────────────────────────────────────────────────────
+
+export interface ContactLookupResponse {
+  id: string;
+  primaryEmail: string | null;
+  firstName: string | null;
+  lastName: string | null;
+  title: string | null;
+  company: string | null;
+}
+
+export async function lookupContactByEmail(
+  email: string,
+): Promise<ContactLookupResponse> {
+  const url = new URL(`${env.apiUrl}/contacts/lookup`);
+  url.searchParams.set('email', email);
+  const res = await fetch(url.toString(), { credentials: 'include' });
+  if (!res.ok) await readError(res);
+  return res.json() as Promise<ContactLookupResponse>;
+}
+
+export async function postSdrDrafterRun(
+  payload: SdrDrafterRunRequest,
+): Promise<SdrDrafterRunEnqueueResponse> {
+  const res = await fetch(`${env.apiUrl}/teammates/sdr-drafter/run`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(payload),
+    credentials: 'include',
+  });
+  if (!res.ok) await readError(res);
+  return res.json() as Promise<SdrDrafterRunEnqueueResponse>;
+}
+
+export async function getSdrDrafterRun(
+  runId: string,
+): Promise<SdrDrafterRunStatusResponse> {
+  const url = `${env.apiUrl}/teammates/sdr-drafter/runs/${encodeURIComponent(runId)}`;
+  const res = await fetch(url, { credentials: 'include' });
+  if (!res.ok) await readError(res);
+  return res.json() as Promise<SdrDrafterRunStatusResponse>;
+}
+
+export function buildSdrDrafterStreamUrl(runId: string): string {
+  return `${env.apiUrl}/teammates/sdr-drafter/runs/${encodeURIComponent(runId)}/stream`;
 }
 
 // ─── Org / invites / members ──────────────────────────────────────────────
