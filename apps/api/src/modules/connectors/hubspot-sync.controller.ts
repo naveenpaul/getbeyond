@@ -9,9 +9,14 @@ import {
   NotFoundException,
   Param,
   Post,
-  Query,
+  UseGuards,
 } from '@nestjs/common';
 import { PrismaService } from '../../common/prisma/prisma.service';
+import { AuthGuard } from '../auth/auth.guard';
+import {
+  CurrentUser,
+  type CurrentUserPayload,
+} from '../auth/current-user.decorator';
 import { QueueService } from '../queue/queue.service';
 import {
   HUBSPOT_SYNC_ERROR_RESPONSE_CAP,
@@ -25,24 +30,23 @@ import {
 } from './hubspot-sync.worker';
 
 /**
- * HubSpot sync HTTP endpoints (T3d.3).
+ * HubSpot sync HTTP endpoints (T3d.3 → T7.3).
  *
  *   POST /connectors/hubspot/sync
- *     Body: { orgId, connectorAccountId, listId, triggeredBy }
+ *     Body: { connectorAccountId, listId }
  *     → 202 { syncRunId, status: 'running' }
  *     Creates the SyncRun + enqueues the worker job. Validates the account
- *     exists, belongs to the org, is kind=hubspot, and isn't already in a
- *     terminal-bad state (expired/circuit_broken). Caller polls
- *     GET /connectors/hubspot/sync-runs/:id for completion.
+ *     exists, belongs to the session's org, is kind=hubspot, and isn't
+ *     already in a terminal-bad state.
  *
- *   GET /connectors/hubspot/sync-runs/:id?orgId=
+ *   GET /connectors/hubspot/sync-runs/:id
  *     → 200 status payload (mirrors CSV shape for UI poll reuse)
  *
- * Auth (pre-real-auth stub): `orgId` lives in the body / query — same
- * pattern as csv-import.controller. Real auth wires this from OrgContext.
+ * Identity (orgId, triggeredBy) comes from the session — never from
+ * body/query. Cross-org ConnectorAccount access → 403.
  */
-
 @Controller('connectors/hubspot')
+@UseGuards(AuthGuard)
 export class HubspotSyncController {
   private readonly prisma: PrismaService;
   private readonly queue: QueueService;
@@ -57,7 +61,10 @@ export class HubspotSyncController {
 
   @Post('sync')
   @HttpCode(202)
-  async sync(@Body() body: unknown): Promise<HubspotSyncEnqueueResponse> {
+  async sync(
+    @Body() body: unknown,
+    @CurrentUser() user: CurrentUserPayload,
+  ): Promise<HubspotSyncEnqueueResponse> {
     const parsed = HubspotSyncRequestSchema.safeParse(body);
     if (!parsed.success) {
       throw new BadRequestException(
@@ -75,7 +82,7 @@ export class HubspotSyncController {
         `ConnectorAccount ${parsed.data.connectorAccountId} not found`,
       );
     }
-    if (account.orgId !== parsed.data.orgId) {
+    if (account.orgId !== user.orgId) {
       throw new ForbiddenException('ConnectorAccount belongs to another org');
     }
     if (account.kind !== 'hubspot') {
@@ -94,7 +101,7 @@ export class HubspotSyncController {
 
     const syncRun = await this.prisma.syncRun.create({
       data: {
-        orgId: parsed.data.orgId,
+        orgId: user.orgId,
         connectorAccountId: parsed.data.connectorAccountId,
         direction: 'pull',
         status: 'running',
@@ -103,10 +110,10 @@ export class HubspotSyncController {
 
     await this.queue.send<HubspotSyncJobPayload>(HUBSPOT_SYNC_QUEUE, {
       syncRunId: syncRun.id,
-      orgId: parsed.data.orgId,
+      orgId: user.orgId,
       connectorAccountId: parsed.data.connectorAccountId,
       listId: parsed.data.listId,
-      triggeredBy: parsed.data.triggeredBy,
+      triggeredBy: user.userId,
     });
 
     return { syncRunId: syncRun.id, status: 'running' };
@@ -115,16 +122,13 @@ export class HubspotSyncController {
   @Get('sync-runs/:id')
   async getSyncRun(
     @Param('id') id: string,
-    @Query('orgId') orgId: string | undefined,
+    @CurrentUser() user: CurrentUserPayload,
   ): Promise<HubspotSyncRunStatusResponse> {
-    if (!orgId) {
-      throw new BadRequestException('orgId query parameter is required');
-    }
     const syncRun = await this.prisma.syncRun.findUnique({ where: { id } });
     if (!syncRun) {
       throw new NotFoundException(`SyncRun ${id} not found`);
     }
-    if (syncRun.orgId !== orgId) {
+    if (syncRun.orgId !== user.orgId) {
       throw new ForbiddenException('SyncRun belongs to another org');
     }
 

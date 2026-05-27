@@ -7,14 +7,11 @@ import { z } from 'zod';
  * carry structured objects — every non-file part is a string. Zod gives us
  * a typed parse + clear error messages without per-field decorator wiring.
  *
- * Pre-auth stub: `orgId` + `triggeredBy` live in the body. When the real
- * auth middleware lands, both come from OrgContext instead and this DTO
- * shrinks to `{ sourceAccountId, columnMapping }`.
+ * Identity (orgId, triggeredBy) is derived from the session by AuthGuard.
+ * The metadata only carries the work-defining fields.
  */
 export const CsvImportMetadataSchema = z.object({
-  orgId: z.string().min(1, 'orgId is required'),
   sourceAccountId: z.string().min(1, 'sourceAccountId is required'),
-  triggeredBy: z.string().min(1, 'triggeredBy is required'),
   columnMapping: z.object({
     email: z.string().min(1, 'columnMapping.email is required'),
     firstName: z.string().min(1).optional(),

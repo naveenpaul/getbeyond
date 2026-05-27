@@ -13,18 +13,17 @@ import {
 import { ResearchRunStream } from '@/components/ResearchRunStream';
 import { ResearchDraftCard } from '@/components/ResearchDraftCard';
 import { ApiError, getResearchRun } from '@/lib/api-client';
-import { useIdentity } from '@/lib/use-identity';
 import { useResearchStream } from '@/lib/use-research-stream';
 
 /**
- * Run detail page (T5.4 → T6.4).
+ * Run detail page (T5.4 → T6.4 → T7).
  *
  * Subscribes to the SSE stream to render live progress. Once a terminal
  * event arrives, fires a single GET /runs/:id to fetch the persisted
  * Draft (with claims + citation URLs joined) for inline display.
  *
- * orgId comes from the session via `useIdentity()` — middleware ensures
- * /research/** is only reachable after sign-in, so identity is present.
+ * Identity is resolved server-side from the session cookie; middleware
+ * ensures /research/** is only reachable after sign-in.
  */
 export default function ResearchRunPage({
   params,
@@ -32,13 +31,8 @@ export default function ResearchRunPage({
   params: Promise<{ runId: string }>;
 }): React.JSX.Element {
   const { runId } = use(params);
-  const { identity } = useIdentity();
-  const orgId = identity?.orgId ?? null;
 
-  const { events, connectionState, terminated } = useResearchStream({
-    runId: orgId ? runId : null,
-    orgId: orgId ?? '',
-  });
+  const { events, connectionState, terminated } = useResearchStream({ runId });
 
   const [snapshot, setSnapshot] = useState<ResearcherRunStatusResponse | null>(
     null,
@@ -46,11 +40,11 @@ export default function ResearchRunPage({
   const [snapshotError, setSnapshotError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!terminated || !orgId) return;
+    if (!terminated) return;
     let cancelled = false;
     (async () => {
       try {
-        const result = await getResearchRun(runId, orgId);
+        const result = await getResearchRun(runId);
         if (!cancelled) setSnapshot(result);
       } catch (err) {
         if (cancelled) return;
@@ -66,7 +60,7 @@ export default function ResearchRunPage({
     return () => {
       cancelled = true;
     };
-  }, [runId, terminated, orgId]);
+  }, [runId, terminated]);
 
   return (
     <main className="container space-y-6 py-12">

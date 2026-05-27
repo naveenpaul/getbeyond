@@ -12,10 +12,11 @@
  */
 
 // ─── POST /teammates/researcher/run ─────────────────────────────────
+//
+// Identity (orgId, triggeredBy) is no longer accepted in the body. The
+// API derives both from the session cookie via @CurrentUser() (T7).
 
 export interface ResearcherRunRequest {
-  orgId: string;
-  triggeredBy: string;
   target: string;
   budgetCents?: number;
 }

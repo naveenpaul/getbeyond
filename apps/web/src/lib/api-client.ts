@@ -50,26 +50,13 @@ export async function postResearchRun(
 
 export async function getResearchRun(
   runId: string,
-  orgId: string,
 ): Promise<ResearcherRunStatusResponse> {
-  const url = new URL(
-    `${env.apiUrl}/teammates/researcher/runs/${encodeURIComponent(runId)}`,
-  );
-  url.searchParams.set('orgId', orgId);
-  const response = await fetch(url.toString(), { credentials: 'include' });
+  const url = `${env.apiUrl}/teammates/researcher/runs/${encodeURIComponent(runId)}`;
+  const response = await fetch(url, { credentials: 'include' });
   if (!response.ok) await readError(response);
   return response.json() as Promise<ResearcherRunStatusResponse>;
 }
 
-/**
- * Build the SSE URL for a run. The component opens an EventSource on this
- * URL; EventSource doesn't support custom headers so the orgId rides as a
- * query param (same pattern as the rest of the pre-auth endpoints).
- */
-export function buildResearchStreamUrl(runId: string, orgId: string): string {
-  const url = new URL(
-    `${env.apiUrl}/teammates/researcher/runs/${encodeURIComponent(runId)}/stream`,
-  );
-  url.searchParams.set('orgId', orgId);
-  return url.toString();
+export function buildResearchStreamUrl(runId: string): string {
+  return `${env.apiUrl}/teammates/researcher/runs/${encodeURIComponent(runId)}/stream`;
 }

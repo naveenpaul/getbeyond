@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { PrismaModule } from '../../common/prisma/prisma.module';
+import { AuthModule } from '../auth/auth.module';
 import { QueueModule } from '../queue/queue.module';
 import {
   ANTHROPIC_CLIENT,
@@ -21,7 +22,7 @@ import { ResearcherWorker } from './researcher/researcher.worker';
  * controllers + workers here without touching the runtime.
  */
 @Module({
-  imports: [PrismaModule, QueueModule],
+  imports: [PrismaModule, QueueModule, AuthModule],
   controllers: [ResearcherController],
   providers: [
     {

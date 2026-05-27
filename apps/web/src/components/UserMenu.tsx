@@ -21,25 +21,18 @@ export function UserMenu(): React.JSX.Element | null {
 
   return (
     <div className="flex items-center gap-3 text-sm">
-      <span className="text-muted-foreground">
-        {identity?.email ?? 'dev user'}
-        {status === 'fallback' ? (
-          <span className="ml-1 text-xs text-amber-600">(dev fallback)</span>
-        ) : null}
-      </span>
-      {status === 'authenticated' ? (
-        <Button
-          size="sm"
-          variant="ghost"
-          onClick={async () => {
-            await signOut();
-            router.replace('/');
-          }}
-        >
-          <LogOut className="h-3.5 w-3.5" />
-          Sign out
-        </Button>
-      ) : null}
+      <span className="text-muted-foreground">{identity?.email ?? ''}</span>
+      <Button
+        size="sm"
+        variant="ghost"
+        onClick={async () => {
+          await signOut();
+          router.replace('/');
+        }}
+      >
+        <LogOut className="h-3.5 w-3.5" />
+        Sign out
+      </Button>
     </div>
   );
 }

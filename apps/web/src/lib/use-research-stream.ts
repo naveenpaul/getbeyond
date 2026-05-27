@@ -24,7 +24,6 @@ export type ConnectionState = 'connecting' | 'open' | 'closed' | 'error';
 
 interface UseResearchStreamArgs {
   runId: string | null;
-  orgId: string;
 }
 
 interface UseResearchStreamResult {
@@ -55,7 +54,6 @@ const HANDLED_TYPES: RunEventType[] = [
 
 export function useResearchStream({
   runId,
-  orgId,
 }: UseResearchStreamArgs): UseResearchStreamResult {
   const [events, setEvents] = useState<RunEvent[]>([]);
   const [connectionState, setConnectionState] =
@@ -74,8 +72,10 @@ export function useResearchStream({
     setTerminated(false);
     setConnectionState('connecting');
 
-    const url = buildResearchStreamUrl(runId, orgId);
-    const es = new EventSource(url);
+    const url = buildResearchStreamUrl(runId);
+    // withCredentials: true so the session cookie rides along on cross-origin
+    // SSE — required for the API's AuthGuard to resolve the user.
+    const es = new EventSource(url, { withCredentials: true });
 
     es.onopen = () => setConnectionState('open');
     es.onerror = () => {
@@ -115,7 +115,7 @@ export function useResearchStream({
     return () => {
       es.close();
     };
-  }, [runId, orgId]);
+  }, [runId]);
 
   return {
     events,

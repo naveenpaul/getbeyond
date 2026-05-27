@@ -1,36 +1,40 @@
 import {
   BadRequestException,
   Controller,
+  ForbiddenException,
   Get,
   Inject,
   NotFoundException,
   Query,
+  UseGuards,
 } from '@nestjs/common';
 import { PrismaService } from '../../common/prisma/prisma.service';
+import { AuthGuard } from '../auth/auth.guard';
+import {
+  CurrentUser,
+  type CurrentUserPayload,
+} from '../auth/current-user.decorator';
 import { hubspotSourceAdapter } from './adapters/hubspot.source';
 import { CredentialManager } from './credential-manager';
 
 /**
- * HubSpot OAuth flow (T3c.4).
+ * HubSpot OAuth flow (T3c.4 → T7.3).
  *
- *   GET  /connectors/hubspot/oauth/start
- *        ?orgId=<org>&redirectUri=<callback>
+ *   GET  /connectors/hubspot/oauth/start?redirectUri=<callback>
  *        → 200 { authUrl, state }
  *        Caller (UI) redirects the browser to authUrl. The state token is
- *        persisted in `OAuthState`; HubSpot echoes it back to /callback.
+ *        persisted in `OAuthState` with the session's orgId; HubSpot
+ *        echoes it back to /callback.
  *
- *   GET  /connectors/hubspot/oauth/callback
- *        ?state=<echoed>&code=<auth-code>
+ *   GET  /connectors/hubspot/oauth/callback?state=<echoed>&code=<auth-code>
  *        → 200 { connectorAccountId }
- *        Verifies + one-shot-consumes the OAuthState row, exchanges the
- *        code for credentials, encrypts + upserts the ConnectorAccount.
+ *        Verifies + one-shot-consumes the OAuthState row. Defense-in-depth:
+ *        the SESSION'S orgId must also match the row's orgId — otherwise a
+ *        leaked state token can't be replayed by a different signed-in user.
  *
- * The 10-min OAuthState TTL is enforced inline (expired rows are deleted
- * before the verify step); OAuthStateReaper sweeps any rows missed by
- * cancelled flows on a 2-min cadence.
- *
- * Auth (pre-real-auth stub): /start takes `orgId` as a query param. Real
- * auth wires this from session context — same pattern as csv-import.controller.
+ * 10-min OAuthState TTL is enforced inline (expired rows are deleted
+ * before the verify step); OAuthStateReaper sweeps cancelled flows on a
+ * 2-min cadence.
  */
 
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
@@ -45,6 +49,7 @@ interface OAuthCallbackResponse {
 }
 
 @Controller('connectors/hubspot/oauth')
+@UseGuards(AuthGuard)
 export class HubspotOauthController {
   private readonly prisma: PrismaService;
   private readonly credentialManager: CredentialManager;
@@ -59,29 +64,18 @@ export class HubspotOauthController {
 
   @Get('start')
   async start(
-    @Query('orgId') orgId: string | undefined,
     @Query('redirectUri') redirectUri: string | undefined,
+    @CurrentUser() user: CurrentUserPayload,
   ): Promise<OAuthStartResponse> {
-    if (!orgId) {
-      throw new BadRequestException('orgId query parameter is required');
-    }
     if (!redirectUri) {
       throw new BadRequestException('redirectUri query parameter is required');
-    }
-    // Verify the org exists so we fail fast instead of writing an OAuthState
-    // row that no callback can ever consume.
-    const org = await this.prisma.organization.findUnique({
-      where: { id: orgId },
-    });
-    if (!org) {
-      throw new NotFoundException(`Organization ${orgId} not found`);
     }
 
     const { authUrl, state } = hubspotSourceAdapter.startOAuth(redirectUri);
     await this.prisma.oAuthState.create({
       data: {
         state,
-        orgId,
+        orgId: user.orgId,
         kind: 'hubspot',
         redirectUri,
         expiresAt: new Date(Date.now() + OAUTH_STATE_TTL_MS),
@@ -95,6 +89,7 @@ export class HubspotOauthController {
   async callback(
     @Query('state') state: string | undefined,
     @Query('code') code: string | undefined,
+    @CurrentUser() user: CurrentUserPayload,
   ): Promise<OAuthCallbackResponse> {
     if (!state) {
       throw new BadRequestException('state query parameter is required');
@@ -113,6 +108,12 @@ export class HubspotOauthController {
       // State token from another vendor's flow — refuse outright.
       throw new BadRequestException(
         `OAuth state belongs to kind=${row.kind}, not hubspot`,
+      );
+    }
+    if (row.orgId !== user.orgId) {
+      // Different signed-in user trying to consume someone else's state.
+      throw new ForbiddenException(
+        'OAuth state belongs to a different org than the current session',
       );
     }
     if (row.expiresAt.getTime() < Date.now()) {

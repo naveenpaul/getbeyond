@@ -9,13 +9,18 @@ import {
   NotFoundException,
   Param,
   Post,
-  Query,
   Sse,
+  UseGuards,
   type MessageEvent,
 } from '@nestjs/common';
 import { Observable } from 'rxjs';
 import { PrismaService } from '../../../common/prisma/prisma.service';
 import { QueueService } from '../../queue/queue.service';
+import { AuthGuard } from '../../auth/auth.guard';
+import {
+  CurrentUser,
+  type CurrentUserPayload,
+} from '../../auth/current-user.decorator';
 import {
   RUN_EVENT_BUS,
   type RunEventBus,
@@ -38,24 +43,30 @@ import {
 const SSE_HEARTBEAT_MS = 15_000;
 
 /**
- * Researcher HTTP endpoints (T4d.2).
+ * Researcher HTTP endpoints (T4d.2 → T7.3).
  *
  *   POST /teammates/researcher/run
- *     Body: { orgId, triggeredBy, target, budgetCents? }
+ *     Body: { target, budgetCents? }
  *     → 202 { runId, status: 'running' }
  *     Creates the AgentRun synchronously + enqueues the worker job, then
- *     returns immediately. Caller polls GET /runs/:id until terminal.
+ *     returns immediately. orgId + triggeredBy come from the session
+ *     (AuthGuard). Caller polls GET /runs/:id until terminal.
  *
- *   GET /teammates/researcher/runs/:id?orgId=
+ *   GET /teammates/researcher/runs/:id
  *     → 200 ResearcherRunStatusResponse
  *     Returns the AgentRun's current state. When status='completed', also
  *     returns the persisted Draft + Claims with their citation URLs joined
- *     for inline display.
+ *     for inline display. orgId comes from the session — 403 on mismatch.
  *
- * Auth (pre-real-auth stub): orgId arrives via body / query. Real auth
- * wires it from OrgContext.
+ *   GET /teammates/researcher/runs/:id/stream
+ *     → text/event-stream of RunEvents until terminal
+ *
+ * All routes require a valid session (AuthGuard). Identity (orgId, userId)
+ * is read from the session via @CurrentUser() — body/query params for
+ * identity are no longer accepted.
  */
 @Controller('teammates/researcher')
+@UseGuards(AuthGuard)
 export class ResearcherController {
   private readonly prisma: PrismaService;
   private readonly queue: QueueService;
@@ -73,7 +84,10 @@ export class ResearcherController {
 
   @Post('run')
   @HttpCode(202)
-  async enqueue(@Body() body: unknown): Promise<ResearcherRunEnqueueResponse> {
+  async enqueue(
+    @Body() body: unknown,
+    @CurrentUser() user: CurrentUserPayload,
+  ): Promise<ResearcherRunEnqueueResponse> {
     const parsed = ResearcherRunRequestSchema.safeParse(body);
     if (!parsed.success) {
       throw new BadRequestException(
@@ -83,22 +97,13 @@ export class ResearcherController {
       );
     }
 
-    const org = await this.prisma.organization.findUnique({
-      where: { id: parsed.data.orgId },
-    });
-    if (!org) {
-      throw new NotFoundException(
-        `Organization ${parsed.data.orgId} not found`,
-      );
-    }
-
     // Mint the AgentRun synchronously so the caller has a runId to poll on.
-    // The worker drives this same row to terminal.
+    // orgId + triggeredBy come from the session — never from the body.
     const run = await this.prisma.agentRun.create({
       data: {
-        orgId: parsed.data.orgId,
+        orgId: user.orgId,
         teammate: RESEARCHER_NAME,
-        triggeredBy: parsed.data.triggeredBy,
+        triggeredBy: user.userId,
         status: 'running',
         inputContext: {
           target: parsed.data.target,
@@ -108,8 +113,8 @@ export class ResearcherController {
 
     await this.queue.send<ResearcherRunJobPayload>(RESEARCHER_RUN_QUEUE, {
       runId: run.id,
-      orgId: parsed.data.orgId,
-      triggeredBy: parsed.data.triggeredBy,
+      orgId: user.orgId,
+      triggeredBy: user.userId,
       target: parsed.data.target,
       budgetCents: parsed.data.budgetCents,
     });
@@ -120,12 +125,8 @@ export class ResearcherController {
   @Get('runs/:id')
   async getRun(
     @Param('id') id: string,
-    @Query('orgId') orgId: string | undefined,
+    @CurrentUser() user: CurrentUserPayload,
   ): Promise<ResearcherRunStatusResponse> {
-    if (!orgId) {
-      throw new BadRequestException('orgId query parameter is required');
-    }
-
     const run = await this.prisma.agentRun.findUnique({
       where: { id },
       include: {
@@ -142,7 +143,7 @@ export class ResearcherController {
     if (!run) {
       throw new NotFoundException(`AgentRun ${id} not found`);
     }
-    if (run.orgId !== orgId) {
+    if (run.orgId !== user.orgId) {
       throw new ForbiddenException('AgentRun belongs to another org');
     }
 
@@ -199,16 +200,13 @@ export class ResearcherController {
   @Sse('runs/:id/stream')
   async stream(
     @Param('id') id: string,
-    @Query('orgId') orgId: string | undefined,
+    @CurrentUser() user: CurrentUserPayload,
   ): Promise<Observable<MessageEvent>> {
-    if (!orgId) {
-      throw new BadRequestException('orgId query parameter is required');
-    }
     const run = await this.prisma.agentRun.findUnique({ where: { id } });
     if (!run) {
       throw new NotFoundException(`AgentRun ${id} not found`);
     }
-    if (run.orgId !== orgId) {
+    if (run.orgId !== user.orgId) {
       throw new ForbiddenException('AgentRun belongs to another org');
     }
 

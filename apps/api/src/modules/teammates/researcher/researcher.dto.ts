@@ -18,8 +18,6 @@ import type {
  * lands, both come from OrgContext and the DTO shrinks to { target }.
  */
 export const ResearcherRunRequestSchema = z.object({
-  orgId: z.string().min(1, 'orgId is required'),
-  triggeredBy: z.string().min(1, 'triggeredBy is required'),
   target: z.string().min(1, 'target is required'),
   budgetCents: z.number().int().min(1).max(10_000).optional(),
 }) satisfies z.ZodType<ResearcherRunRequest>;

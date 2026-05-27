@@ -41,6 +41,8 @@ import {
   type NestFastifyApplication,
 } from '@nestjs/platform-fastify';
 import { PrismaClient } from '@prisma/client';
+import { createAuth } from '../auth/auth.config';
+import { createTestSession } from '../auth/test-session';
 import { generateMasterKey } from './credential-encryption';
 import type { HubspotSyncRunStatusResponse } from './hubspot-sync.dto';
 
@@ -54,8 +56,9 @@ describe.skipIf(!DATABASE_URL)(
     let app: NestFastifyApplication;
     let prisma: PrismaClient;
     let credentialManager: import('./credential-manager').CredentialManager;
-    let orgA: string;
-    let orgB: string;
+    let auth: ReturnType<typeof createAuth>;
+    let alice: { cookie: string; userId: string; orgId: string };
+    let bob: { cookie: string; userId: string; orgId: string };
     let hubspotAccountA: string;
     let hubspotAccountB: string;
 
@@ -69,6 +72,7 @@ describe.skipIf(!DATABASE_URL)(
       process.env.CREDENTIAL_MASTER_KEY = generateMasterKey();
       process.env.HUBSPOT_CLIENT_ID = 'client-id-test';
       process.env.HUBSPOT_CLIENT_SECRET = 'client-secret-test';
+      process.env.AUTH_SECRET = 'test-auth-secret-32-chars-padding-to-match';
 
       const { AppModule } = await import('../../app.module');
       const moduleRef = await Test.createTestingModule({
@@ -86,6 +90,7 @@ describe.skipIf(!DATABASE_URL)(
         datasources: { db: { url: DATABASE_URL! } },
       });
       await prisma.$connect();
+      auth = createAuth(prisma);
     });
 
     afterAll(async () => {
@@ -101,7 +106,8 @@ describe.skipIf(!DATABASE_URL)(
           contact_sources, contact_emails, contact_list_members, contact_lists,
           contacts, sync_runs, oauth_states, connector_accounts,
           tool_calls, model_calls, citations, agent_runs,
-          voices, company_brains, users, organizations
+          voices, company_brains, sessions, accounts, verifications,
+          users, organizations
         RESTART IDENTITY CASCADE
       `);
       await prisma
@@ -110,13 +116,13 @@ describe.skipIf(!DATABASE_URL)(
         )
         .catch(() => {});
 
-      const o1 = await prisma.organization.create({ data: { name: 'OrgA' } });
-      const o2 = await prisma.organization.create({ data: { name: 'OrgB' } });
-      orgA = o1.id;
-      orgB = o2.id;
+      // Magic-link signup auto-creates Org A + Org B via the user.create
+      // hook. Subsequent calls return the existing session for that user.
+      alice = await createTestSession(prisma, auth, 'alice@test.com');
+      bob = await createTestSession(prisma, auth, 'bob@test.com');
 
       hubspotAccountA = await credentialManager.persistInitialCredentials({
-        orgId: orgA,
+        orgId: alice.orgId,
         kind: 'hubspot',
         authMode: 'oauth',
         creds: {
@@ -127,31 +133,32 @@ describe.skipIf(!DATABASE_URL)(
         scopes: ['oauth', 'crm.objects.contacts.read', 'crm.lists.read'],
       });
       hubspotAccountB = await credentialManager.persistInitialCredentials({
-        orgId: orgB,
+        orgId: bob.orgId,
         kind: 'hubspot',
         authMode: 'oauth',
         creds: { accessToken: 'tok-B', refreshToken: 'r-B', hubId: 2222 },
       });
     });
 
-    async function postSync(body: Record<string, unknown>) {
+    async function postSync(body: Record<string, unknown>, cookie: string) {
       return app.inject({
         method: 'POST',
         url: '/connectors/hubspot/sync',
         payload: body,
-        headers: { 'content-type': 'application/json' },
+        headers: { 'content-type': 'application/json', cookie },
       });
     }
 
     async function pollUntilDone(
       syncRunId: string,
-      orgId: string,
+      cookie: string,
     ): Promise<HubspotSyncRunStatusResponse> {
       const start = Date.now();
       while (Date.now() - start < POLL_TIMEOUT_MS) {
         const res = await app.inject({
           method: 'GET',
-          url: `/connectors/hubspot/sync-runs/${syncRunId}?orgId=${orgId}`,
+          url: `/connectors/hubspot/sync-runs/${syncRunId}`,
+          headers: { cookie },
         });
         if (res.statusCode === 200) {
           const body = res.json() as HubspotSyncRunStatusResponse;
@@ -194,17 +201,13 @@ describe.skipIf(!DATABASE_URL)(
         ],
       });
 
-      const res = await postSync({
-        orgId: orgA,
-        connectorAccountId: hubspotAccountA,
-        listId: 'list-42',
-        triggeredBy: 'usr_test',
-      });
+      const res = await postSync({ connectorAccountId: hubspotAccountA,
+        listId: 'list-42', }, alice.cookie);
       expect(res.statusCode).toBe(202);
       const body = res.json() as { syncRunId: string; status: string };
       expect(body.status).toBe('running');
 
-      const finalState = await pollUntilDone(body.syncRunId, orgA);
+      const finalState = await pollUntilDone(body.syncRunId, alice.cookie);
       expect(finalState.status).toBe('completed');
       expect(finalState.recordsIn).toBe(2);
       expect(finalState.recordsOut).toBe(2);
@@ -212,7 +215,7 @@ describe.skipIf(!DATABASE_URL)(
 
       // Contacts persisted with HubSpot provenance.
       const contacts = await prisma.contact.findMany({
-        where: { orgId: orgA },
+        where: { orgId: alice.orgId },
         include: { sources: true },
       });
       expect(contacts).toHaveLength(2);
@@ -249,14 +252,10 @@ describe.skipIf(!DATABASE_URL)(
           results: [{ id: '3', properties: { email: 'c@x.com' } }],
         });
 
-      const res = await postSync({
-        orgId: orgA,
-        connectorAccountId: hubspotAccountA,
-        listId: 'list-multi',
-        triggeredBy: 'usr_test',
-      });
+      const res = await postSync({ connectorAccountId: hubspotAccountA,
+        listId: 'list-multi', }, alice.cookie);
       const body = res.json() as { syncRunId: string };
-      const finalState = await pollUntilDone(body.syncRunId, orgA);
+      const finalState = await pollUntilDone(body.syncRunId, alice.cookie);
 
       expect(finalState.status).toBe('completed');
       expect(finalState.recordsIn).toBe(3);
@@ -277,58 +276,42 @@ describe.skipIf(!DATABASE_URL)(
         ],
       });
 
-      const res = await postSync({
-        orgId: orgA,
-        connectorAccountId: hubspotAccountA,
-        listId: 'list-1',
-        triggeredBy: 'usr_test',
-      });
+      const res = await postSync({ connectorAccountId: hubspotAccountA,
+        listId: 'list-1', }, alice.cookie);
       const body = res.json() as { syncRunId: string };
-      const finalState = await pollUntilDone(body.syncRunId, orgA);
+      const finalState = await pollUntilDone(body.syncRunId, alice.cookie);
       expect(finalState.status).toBe('completed');
       expect(finalState.recordsIn).toBe(1);
       expect(finalState.recordsOut).toBe(1);
-      const count = await prisma.contact.count({ where: { orgId: orgA } });
+      const count = await prisma.contact.count({ where: { orgId: alice.orgId } });
       expect(count).toBe(1);
     });
 
     // ─── POST /connectors/hubspot/sync — validation ──────────────────
 
     it('rejects an unknown connectorAccountId → 404', async () => {
-      const res = await postSync({
-        orgId: orgA,
-        connectorAccountId: 'does-not-exist',
-        listId: 'list-1',
-        triggeredBy: 'usr_test',
-      });
+      const res = await postSync({ connectorAccountId: 'does-not-exist',
+        listId: 'list-1', }, alice.cookie);
       expect(res.statusCode).toBe(404);
     });
 
     it('rejects a connectorAccount that belongs to another org → 403', async () => {
-      const res = await postSync({
-        orgId: orgA,
-        connectorAccountId: hubspotAccountB,
-        listId: 'list-1',
-        triggeredBy: 'usr_test',
-      });
+      const res = await postSync({ connectorAccountId: hubspotAccountB,
+        listId: 'list-1', }, alice.cookie);
       expect(res.statusCode).toBe(403);
     });
 
     it('rejects a non-hubspot account (e.g. csv) → 400', async () => {
       const csvAccount = await prisma.connectorAccount.create({
         data: {
-          orgId: orgA,
+          orgId: alice.orgId,
           kind: 'csv',
           authMode: 'upload',
           credentials: Buffer.from(''),
         },
       });
-      const res = await postSync({
-        orgId: orgA,
-        connectorAccountId: csvAccount.id,
-        listId: 'list-1',
-        triggeredBy: 'usr_test',
-      });
+      const res = await postSync({ connectorAccountId: csvAccount.id,
+        listId: 'list-1', }, alice.cookie);
       expect(res.statusCode).toBe(400);
     });
 
@@ -337,21 +320,13 @@ describe.skipIf(!DATABASE_URL)(
         where: { id: hubspotAccountA },
         data: { status: 'expired' },
       });
-      const res = await postSync({
-        orgId: orgA,
-        connectorAccountId: hubspotAccountA,
-        listId: 'list-1',
-        triggeredBy: 'usr_test',
-      });
+      const res = await postSync({ connectorAccountId: hubspotAccountA,
+        listId: 'list-1', }, alice.cookie);
       expect(res.statusCode).toBe(400);
     });
 
     it('rejects missing listId → 400', async () => {
-      const res = await postSync({
-        orgId: orgA,
-        connectorAccountId: hubspotAccountA,
-        triggeredBy: 'usr_test',
-      });
+      const res = await postSync({ connectorAccountId: hubspotAccountA, }, alice.cookie);
       expect(res.statusCode).toBe(400);
     });
 
@@ -362,26 +337,26 @@ describe.skipIf(!DATABASE_URL)(
         results: [],
         paging: undefined,
       });
-      const res = await postSync({
-        orgId: orgA,
-        connectorAccountId: hubspotAccountA,
-        listId: 'l',
-        triggeredBy: 'usr_test',
-      });
+      const res = await postSync(
+        { connectorAccountId: hubspotAccountA, listId: 'l' },
+        alice.cookie,
+      );
       const { syncRunId } = res.json() as { syncRunId: string };
+      // Bob signed in → tries to read alice's sync run.
       const cross = await app.inject({
         method: 'GET',
-        url: `/connectors/hubspot/sync-runs/${syncRunId}?orgId=${orgB}`,
+        url: `/connectors/hubspot/sync-runs/${syncRunId}`,
+        headers: { cookie: bob.cookie },
       });
       expect(cross.statusCode).toBe(403);
     });
 
-    it('GET sync-runs/:id without orgId → 400', async () => {
+    it('GET sync-runs/:id without session → 401', async () => {
       const res = await app.inject({
         method: 'GET',
         url: '/connectors/hubspot/sync-runs/anything',
       });
-      expect(res.statusCode).toBe(400);
+      expect(res.statusCode).toBe(401);
     });
 
     // ─── Worker error surfacing ──────────────────────────────────────
@@ -391,14 +366,10 @@ describe.skipIf(!DATABASE_URL)(
       err.code = 503;
       hubspotMocks.membershipsGetPage.mockRejectedValueOnce(err);
 
-      const res = await postSync({
-        orgId: orgA,
-        connectorAccountId: hubspotAccountA,
-        listId: 'list-bad',
-        triggeredBy: 'usr_test',
-      });
+      const res = await postSync({ connectorAccountId: hubspotAccountA,
+        listId: 'list-bad', }, alice.cookie);
       const { syncRunId } = res.json() as { syncRunId: string };
-      const finalState = await pollUntilDone(syncRunId, orgA);
+      const finalState = await pollUntilDone(syncRunId, alice.cookie);
       expect(finalState.status).toBe('failed');
       expect(finalState.errors.at(-1)?.reason).toBe('fatal');
     });

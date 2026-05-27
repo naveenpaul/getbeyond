@@ -8,6 +8,8 @@ import multipart from '@fastify/multipart';
 import FormData from 'form-data';
 import { PrismaClient } from '@prisma/client';
 import { AppModule } from '../../app.module';
+import { createAuth } from '../auth/auth.config';
+import { createTestSession } from '../auth/test-session';
 import type { CsvSyncRunStatusResponse } from './csv-import.dto';
 
 /**
@@ -37,8 +39,9 @@ describe.skipIf(!DATABASE_URL)(
   () => {
     let app: NestFastifyApplication;
     let prisma: PrismaClient;
-    let orgA: string;
-    let orgB: string;
+    let auth: ReturnType<typeof createAuth>;
+    let alice: { cookie: string; userId: string; orgId: string };
+    let bob: { cookie: string; userId: string; orgId: string };
     let csvAccountA: string;
     let hubspotAccountA: string;
     let csvAccountB: string;
@@ -50,6 +53,11 @@ describe.skipIf(!DATABASE_URL)(
           `Integration tests refuse to run against database "${dbName}".`,
         );
       }
+
+      process.env.CREDENTIAL_MASTER_KEY ??= Buffer.from(
+        new Uint8Array(32).fill(7),
+      ).toString('base64');
+      process.env.AUTH_SECRET ??= 'test-auth-secret-32-chars-padding-to-match';
 
       const moduleRef = await Test.createTestingModule({
         imports: [AppModule],
@@ -67,6 +75,7 @@ describe.skipIf(!DATABASE_URL)(
         datasources: { db: { url: DATABASE_URL! } },
       });
       await prisma.$connect();
+      auth = createAuth(prisma);
     });
 
     afterAll(async () => {
@@ -79,9 +88,10 @@ describe.skipIf(!DATABASE_URL)(
         TRUNCATE TABLE
           draft_actions, claims, drafts,
           contact_sources, contact_emails, contact_list_members, contact_lists,
-          contacts, sync_runs, connector_accounts,
+          contacts, sync_runs, oauth_states, connector_accounts,
           tool_calls, model_calls, citations, agent_runs,
-          voices, company_brains, users, organizations
+          voices, company_brains, sessions, accounts, verifications,
+          users, organizations
         RESTART IDENTITY CASCADE
       `);
       await prisma
@@ -92,15 +102,13 @@ describe.skipIf(!DATABASE_URL)(
           // pg-boss schema not yet bootstrapped on the first beforeEach.
         });
 
-      const o1 = await prisma.organization.create({ data: { name: 'OrgA' } });
-      const o2 = await prisma.organization.create({ data: { name: 'OrgB' } });
-      orgA = o1.id;
-      orgB = o2.id;
+      alice = await createTestSession(prisma, auth, 'alice@test.com');
+      bob = await createTestSession(prisma, auth, 'bob@test.com');
 
       csvAccountA = (
         await prisma.connectorAccount.create({
           data: {
-            orgId: orgA,
+            orgId: alice.orgId,
             kind: 'csv',
             authMode: 'upload',
             credentials: Buffer.from(''),
@@ -110,7 +118,7 @@ describe.skipIf(!DATABASE_URL)(
       hubspotAccountA = (
         await prisma.connectorAccount.create({
           data: {
-            orgId: orgA,
+            orgId: alice.orgId,
             kind: 'hubspot',
             authMode: 'oauth',
             credentials: Buffer.from('test-sealed'),
@@ -120,7 +128,7 @@ describe.skipIf(!DATABASE_URL)(
       csvAccountB = (
         await prisma.connectorAccount.create({
           data: {
-            orgId: orgB,
+            orgId: bob.orgId,
             kind: 'csv',
             authMode: 'upload',
             credentials: Buffer.from(''),
@@ -132,6 +140,7 @@ describe.skipIf(!DATABASE_URL)(
     async function postMultipart(
       csv: string | Buffer,
       metadata: Record<string, unknown>,
+      cookie: string = alice.cookie,
     ) {
       const form = new FormData();
       form.append(
@@ -144,19 +153,20 @@ describe.skipIf(!DATABASE_URL)(
         method: 'POST',
         url: '/connectors/csv/import',
         payload: form.getBuffer(),
-        headers: form.getHeaders(),
+        headers: { ...form.getHeaders(), cookie },
       });
     }
 
     async function pollSyncRunUntilDone(
       syncRunId: string,
-      orgId: string,
+      cookie: string,
     ): Promise<CsvSyncRunStatusResponse> {
       const start = Date.now();
       while (Date.now() - start < POLL_TIMEOUT_MS) {
         const res = await app.inject({
           method: 'GET',
-          url: `/connectors/csv/sync-runs/${syncRunId}?orgId=${orgId}`,
+          url: `/connectors/csv/sync-runs/${syncRunId}`,
+          headers: { cookie },
         });
         if (res.statusCode === 200) {
           const body = res.json() as CsvSyncRunStatusResponse;
@@ -181,9 +191,7 @@ describe.skipIf(!DATABASE_URL)(
       ].join('\n');
 
       const res = await postMultipart(csv, {
-        orgId: orgA,
         sourceAccountId: csvAccountA,
-        triggeredBy: 'usr_test',
         columnMapping: {
           email: 'Email',
           firstName: 'First Name',
@@ -196,12 +204,14 @@ describe.skipIf(!DATABASE_URL)(
       expect(body.status).toBe('running');
       expect(body.syncRunId).toBeTruthy();
 
-      const finalState = await pollSyncRunUntilDone(body.syncRunId, orgA);
+      const finalState = await pollSyncRunUntilDone(body.syncRunId, alice.cookie);
       expect(finalState.status).toBe('completed');
       expect(finalState.recordsOut).toBe(2);
       expect(finalState.errorCount).toBe(0);
 
-      const contacts = await prisma.contact.findMany({ where: { orgId: orgA } });
+      const contacts = await prisma.contact.findMany({
+        where: { orgId: alice.orgId },
+      });
       expect(contacts).toHaveLength(2);
     });
 
@@ -215,7 +225,7 @@ describe.skipIf(!DATABASE_URL)(
         method: 'POST',
         url: '/connectors/csv/import',
         payload: form.getBuffer(),
-        headers: form.getHeaders(),
+        headers: { ...form.getHeaders(), cookie: alice.cookie },
       });
       expect(res.statusCode).toBe(400);
       expect(res.json().message).toContain('metadata');
@@ -226,9 +236,7 @@ describe.skipIf(!DATABASE_URL)(
       form.append(
         'metadata',
         JSON.stringify({
-          orgId: orgA,
           sourceAccountId: csvAccountA,
-          triggeredBy: 'usr_test',
           columnMapping: { email: 'Email' },
         }),
       );
@@ -236,7 +244,7 @@ describe.skipIf(!DATABASE_URL)(
         method: 'POST',
         url: '/connectors/csv/import',
         payload: form.getBuffer(),
-        headers: form.getHeaders(),
+        headers: { ...form.getHeaders(), cookie: alice.cookie },
       });
       expect(res.statusCode).toBe(400);
       expect(res.json().message).toContain('file');
@@ -253,7 +261,7 @@ describe.skipIf(!DATABASE_URL)(
         method: 'POST',
         url: '/connectors/csv/import',
         payload: form.getBuffer(),
-        headers: form.getHeaders(),
+        headers: { ...form.getHeaders(), cookie: alice.cookie },
       });
       expect(res.statusCode).toBe(400);
       expect(res.json().message).toContain('valid JSON');
@@ -261,9 +269,7 @@ describe.skipIf(!DATABASE_URL)(
 
     it('400 when metadata fails Zod validation (missing columnMapping.email)', async () => {
       const res = await postMultipart('Email\nx@y.com', {
-        orgId: orgA,
         sourceAccountId: csvAccountA,
-        triggeredBy: 'usr_test',
         columnMapping: {},
       });
       expect(res.statusCode).toBe(400);
@@ -272,9 +278,7 @@ describe.skipIf(!DATABASE_URL)(
 
     it('404 when sourceAccountId does not exist', async () => {
       const res = await postMultipart('Email\nx@y.com', {
-        orgId: orgA,
         sourceAccountId: 'cuid_does_not_exist',
-        triggeredBy: 'usr_test',
         columnMapping: { email: 'Email' },
       });
       expect(res.statusCode).toBe(404);
@@ -282,9 +286,7 @@ describe.skipIf(!DATABASE_URL)(
 
     it('403 when ConnectorAccount belongs to a different org', async () => {
       const res = await postMultipart('Email\nx@y.com', {
-        orgId: orgA,
         sourceAccountId: csvAccountB,
-        triggeredBy: 'usr_test',
         columnMapping: { email: 'Email' },
       });
       expect(res.statusCode).toBe(403);
@@ -292,9 +294,7 @@ describe.skipIf(!DATABASE_URL)(
 
     it('400 when ConnectorAccount kind is not csv', async () => {
       const res = await postMultipart('Email\nx@y.com', {
-        orgId: orgA,
         sourceAccountId: hubspotAccountA,
-        triggeredBy: 'usr_test',
         columnMapping: { email: 'Email' },
       });
       expect(res.statusCode).toBe(400);
@@ -306,9 +306,7 @@ describe.skipIf(!DATABASE_URL)(
       // Test allocates the smallest oversize possible (50 MB + 1 KB).
       const oversized = Buffer.alloc(MULTIPART_LIMIT_BYTES + 1024, 0x61);
       const res = await postMultipart(oversized, {
-        orgId: orgA,
         sourceAccountId: csvAccountA,
-        triggeredBy: 'usr_test',
         columnMapping: { email: 'Email' },
       });
       expect(res.statusCode).toBe(413);
@@ -328,20 +326,20 @@ describe.skipIf(!DATABASE_URL)(
       expect(csv.length).toBeGreaterThan(INLINE_THRESHOLD_BYTES);
 
       const postRes = await postMultipart(csv, {
-        orgId: orgA,
         sourceAccountId: csvAccountA,
-        triggeredBy: 'usr_test',
         columnMapping: { email: 'Email' },
       });
       expect(postRes.statusCode).toBe(202);
       const { syncRunId } = postRes.json() as { syncRunId: string };
 
-      const final = await pollSyncRunUntilDone(syncRunId, orgA);
+      const final = await pollSyncRunUntilDone(syncRunId, alice.cookie);
       expect(final.status).toBe('completed');
       expect(final.recordsOut).toBe(3);
       expect(final.errorCount).toBe(0);
 
-      const contacts = await prisma.contact.findMany({ where: { orgId: orgA } });
+      const contacts = await prisma.contact.findMany({
+        where: { orgId: alice.orgId },
+      });
       expect(contacts).toHaveLength(3);
       expect(contacts.map((c) => c.normalizedEmail).sort()).toEqual([
         'priya@gamma.org',
@@ -354,13 +352,11 @@ describe.skipIf(!DATABASE_URL)(
 
     it('GET sync-runs/:id returns full status payload for a completed run', async () => {
       const postRes = await postMultipart('Email\nsarah@acme.com\ntom@beta.com', {
-        orgId: orgA,
         sourceAccountId: csvAccountA,
-        triggeredBy: 'usr_test',
         columnMapping: { email: 'Email' },
       });
       const { syncRunId } = postRes.json() as { syncRunId: string };
-      const final = await pollSyncRunUntilDone(syncRunId, orgA);
+      const final = await pollSyncRunUntilDone(syncRunId, alice.cookie);
 
       expect(final.syncRunId).toBe(syncRunId);
       expect(final.status).toBe('completed');
@@ -375,13 +371,11 @@ describe.skipIf(!DATABASE_URL)(
         '\n',
       );
       const postRes = await postMultipart(csv, {
-        orgId: orgA,
         sourceAccountId: csvAccountA,
-        triggeredBy: 'usr_test',
         columnMapping: { email: 'Email' },
       });
       const { syncRunId } = postRes.json() as { syncRunId: string };
-      const final = await pollSyncRunUntilDone(syncRunId, orgA);
+      const final = await pollSyncRunUntilDone(syncRunId, alice.cookie);
 
       expect(final.status).toBe('completed');
       expect(final.recordsOut).toBe(2);
@@ -389,35 +383,34 @@ describe.skipIf(!DATABASE_URL)(
       expect(final.errors.length).toBeGreaterThanOrEqual(1);
     });
 
-    it('GET sync-runs/:id returns 400 when orgId query param is missing', async () => {
+    it('GET sync-runs/:id returns 401 when no session cookie is sent', async () => {
       const res = await app.inject({
         method: 'GET',
         url: '/connectors/csv/sync-runs/cuid_any',
       });
-      expect(res.statusCode).toBe(400);
-      expect(res.json().message).toContain('orgId');
+      expect(res.statusCode).toBe(401);
     });
 
     it('GET sync-runs/:id returns 404 for an unknown id', async () => {
       const res = await app.inject({
         method: 'GET',
-        url: `/connectors/csv/sync-runs/cuid_does_not_exist?orgId=${orgA}`,
+        url: '/connectors/csv/sync-runs/cuid_does_not_exist',
+        headers: { cookie: alice.cookie },
       });
       expect(res.statusCode).toBe(404);
     });
 
-    it('GET sync-runs/:id returns 403 when orgId does not match the SyncRun owner', async () => {
+    it('GET sync-runs/:id returns 403 when caller org does not match the SyncRun owner', async () => {
       const postRes = await postMultipart('Email\nx@y.com', {
-        orgId: orgA,
         sourceAccountId: csvAccountA,
-        triggeredBy: 'usr_test',
         columnMapping: { email: 'Email' },
       });
       const { syncRunId } = postRes.json() as { syncRunId: string };
 
       const res = await app.inject({
         method: 'GET',
-        url: `/connectors/csv/sync-runs/${syncRunId}?orgId=${orgB}`,
+        url: `/connectors/csv/sync-runs/${syncRunId}`,
+        headers: { cookie: bob.cookie },
       });
       expect(res.statusCode).toBe(403);
     });

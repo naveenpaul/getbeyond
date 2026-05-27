@@ -9,11 +9,16 @@ import {
   Param,
   PayloadTooLargeException,
   Post,
-  Query,
   Req,
+  UseGuards,
 } from '@nestjs/common';
 import type { FastifyRequest } from 'fastify';
 import { PrismaService } from '../../common/prisma/prisma.service';
+import { AuthGuard } from '../auth/auth.guard';
+import {
+  CurrentUser,
+  type CurrentUserPayload,
+} from '../auth/current-user.decorator';
 import { QueueService } from '../queue/queue.service';
 import { StorageService } from '../storage/storage.service';
 import {
@@ -43,6 +48,7 @@ interface ParsedMultipart {
 }
 
 @Controller('connectors/csv')
+@UseGuards(AuthGuard)
 export class CsvImportController {
   private readonly prisma: PrismaService;
   private readonly queue: QueueService;
@@ -73,7 +79,10 @@ export class CsvImportController {
    */
   @Post('import')
   @HttpCode(202)
-  async import(@Req() req: FastifyRequest): Promise<CsvImportEnqueueResponse> {
+  async import(
+    @Req() req: FastifyRequest,
+    @CurrentUser() user: CurrentUserPayload,
+  ): Promise<CsvImportEnqueueResponse> {
     const { fileBuffer, metadata } = await parseMultipart(req);
 
     const account = await this.prisma.connectorAccount.findUnique({
@@ -84,7 +93,7 @@ export class CsvImportController {
         `ConnectorAccount ${metadata.sourceAccountId} not found`,
       );
     }
-    if (account.orgId !== metadata.orgId) {
+    if (account.orgId !== user.orgId) {
       throw new ForbiddenException('ConnectorAccount belongs to another org');
     }
     if (account.kind !== 'csv') {
@@ -108,7 +117,7 @@ export class CsvImportController {
 
     const syncRun = await this.prisma.syncRun.create({
       data: {
-        orgId: metadata.orgId,
+        orgId: user.orgId,
         connectorAccountId: metadata.sourceAccountId,
         direction: 'pull',
         status: 'running',
@@ -117,11 +126,11 @@ export class CsvImportController {
 
     await this.queue.send<CsvImportJobPayload>(CSV_IMPORT_QUEUE, {
       syncRunId: syncRun.id,
-      orgId: metadata.orgId,
+      orgId: user.orgId,
       sourceAccountId: metadata.sourceAccountId,
       csv,
       columnMapping: metadata.columnMapping,
-      triggeredBy: metadata.triggeredBy,
+      triggeredBy: user.userId,
     });
 
     return { syncRunId: syncRun.id, status: 'running' };
@@ -130,24 +139,18 @@ export class CsvImportController {
   /**
    * Poll SyncRun status. Returns 200 + the current state regardless of
    * whether the worker has finished (callers can poll until status ≠ 'running').
-   *
-   * Tenant guards: same as the upload endpoint — orgId is the load-bearing
-   * isolation check until real auth lands. Pre-auth stub passes it via
-   * `?orgId=` query param; real auth will pull it from OrgContext.
+   * orgId comes from the session — 403 on cross-org access.
    */
   @Get('sync-runs/:id')
   async getSyncRun(
     @Param('id') id: string,
-    @Query('orgId') orgId: string | undefined,
+    @CurrentUser() user: CurrentUserPayload,
   ): Promise<CsvSyncRunStatusResponse> {
-    if (!orgId) {
-      throw new BadRequestException('orgId query parameter is required');
-    }
     const syncRun = await this.prisma.syncRun.findUnique({ where: { id } });
     if (!syncRun) {
       throw new NotFoundException(`SyncRun ${id} not found`);
     }
-    if (syncRun.orgId !== orgId) {
+    if (syncRun.orgId !== user.orgId) {
       throw new ForbiddenException('SyncRun belongs to another org');
     }
 

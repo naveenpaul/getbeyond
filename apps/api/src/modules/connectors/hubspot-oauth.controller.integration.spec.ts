@@ -29,6 +29,8 @@ import {
   type NestFastifyApplication,
 } from '@nestjs/platform-fastify';
 import { PrismaClient } from '@prisma/client';
+import { createAuth } from '../auth/auth.config';
+import { createTestSession } from '../auth/test-session';
 import { generateMasterKey } from './credential-encryption';
 
 const DATABASE_URL = process.env.DATABASE_URL;
@@ -38,8 +40,9 @@ describe.skipIf(!DATABASE_URL)(
   () => {
     let app: NestFastifyApplication;
     let prisma: PrismaClient;
-    let orgA: string;
-    let orgB: string;
+    let auth: ReturnType<typeof createAuth>;
+    let alice: { cookie: string; userId: string; orgId: string };
+    let bob: { cookie: string; userId: string; orgId: string };
 
     beforeAll(async () => {
       const dbName = new URL(DATABASE_URL!).pathname.replace(/^\//, '');
@@ -54,6 +57,7 @@ describe.skipIf(!DATABASE_URL)(
       process.env.CREDENTIAL_MASTER_KEY = generateMasterKey();
       process.env.HUBSPOT_CLIENT_ID = 'client-id-test';
       process.env.HUBSPOT_CLIENT_SECRET = 'client-secret-test';
+      process.env.AUTH_SECRET = 'test-auth-secret-32-chars-padding-to-match';
 
       // Import AppModule AFTER setting env so the module's static config sees it.
       const { AppModule } = await import('../../app.module');
@@ -71,6 +75,7 @@ describe.skipIf(!DATABASE_URL)(
         datasources: { db: { url: DATABASE_URL! } },
       });
       await prisma.$connect();
+      auth = createAuth(prisma);
     });
 
     afterAll(async () => {
@@ -86,7 +91,8 @@ describe.skipIf(!DATABASE_URL)(
           contact_sources, contact_emails, contact_list_members, contact_lists,
           contacts, sync_runs, oauth_states, connector_accounts,
           tool_calls, model_calls, citations, agent_runs,
-          voices, company_brains, users, organizations
+          voices, company_brains, sessions, accounts, verifications,
+          users, organizations
         RESTART IDENTITY CASCADE
       `);
       await prisma
@@ -95,18 +101,17 @@ describe.skipIf(!DATABASE_URL)(
         )
         .catch(() => {});
 
-      const o1 = await prisma.organization.create({ data: { name: 'OrgA' } });
-      const o2 = await prisma.organization.create({ data: { name: 'OrgB' } });
-      orgA = o1.id;
-      orgB = o2.id;
+      alice = await createTestSession(prisma, auth, 'alice@test.com');
+      bob = await createTestSession(prisma, auth, 'bob@test.com');
     });
 
     // ─── /start ───────────────────────────────────────────────────────
 
-    it('GET /start returns authUrl + state, persists OAuthState row', async () => {
+    it('GET /start returns authUrl + state, persists OAuthState row scoped to session org', async () => {
       const res = await app.inject({
         method: 'GET',
-        url: `/connectors/hubspot/oauth/start?orgId=${orgA}&redirectUri=${encodeURIComponent('https://app.example/cb')}`,
+        url: `/connectors/hubspot/oauth/start?redirectUri=${encodeURIComponent('https://app.example/cb')}`,
+        headers: { cookie: alice.cookie },
       });
       expect(res.statusCode).toBe(200);
       const body = JSON.parse(res.body) as { authUrl: string; state: string };
@@ -117,49 +122,43 @@ describe.skipIf(!DATABASE_URL)(
       const row = await prisma.oAuthState.findUnique({
         where: { state: body.state },
       });
-      expect(row?.orgId).toBe(orgA);
+      expect(row?.orgId).toBe(alice.orgId);
       expect(row?.kind).toBe('hubspot');
       expect(row?.redirectUri).toBe('https://app.example/cb');
       expect(row?.expiresAt.getTime()).toBeGreaterThan(Date.now());
     });
 
-    it('GET /start without orgId → 400', async () => {
+    it('GET /start without session → 401', async () => {
       const res = await app.inject({
         method: 'GET',
         url: '/connectors/hubspot/oauth/start?redirectUri=https://app.example/cb',
       });
-      expect(res.statusCode).toBe(400);
+      expect(res.statusCode).toBe(401);
     });
 
     it('GET /start without redirectUri → 400', async () => {
       const res = await app.inject({
         method: 'GET',
-        url: `/connectors/hubspot/oauth/start?orgId=${orgA}`,
+        url: '/connectors/hubspot/oauth/start',
+        headers: { cookie: alice.cookie },
       });
       expect(res.statusCode).toBe(400);
     });
 
-    it('GET /start with unknown orgId → 404', async () => {
-      const res = await app.inject({
-        method: 'GET',
-        url: `/connectors/hubspot/oauth/start?orgId=does-not-exist&redirectUri=https://app.example/cb`,
-      });
-      expect(res.statusCode).toBe(404);
-    });
-
     // ─── /callback ────────────────────────────────────────────────────
 
-    async function startFlow(orgId: string): Promise<{ state: string }> {
+    async function startFlow(cookie: string): Promise<{ state: string }> {
       const res = await app.inject({
         method: 'GET',
-        url: `/connectors/hubspot/oauth/start?orgId=${orgId}&redirectUri=https%3A%2F%2Fapp.example%2Fcb`,
+        url: `/connectors/hubspot/oauth/start?redirectUri=https%3A%2F%2Fapp.example%2Fcb`,
+        headers: { cookie },
       });
       const body = JSON.parse(res.body) as { state: string };
       return body;
     }
 
-    it('GET /callback exchanges code + creates ConnectorAccount', async () => {
-      const { state } = await startFlow(orgA);
+    it('GET /callback exchanges code + creates ConnectorAccount on the session org', async () => {
+      const { state } = await startFlow(alice.cookie);
       oauthTokensCreate.mockResolvedValueOnce({
         accessToken: 'access-1',
         refreshToken: 'refresh-1',
@@ -169,6 +168,7 @@ describe.skipIf(!DATABASE_URL)(
       const res = await app.inject({
         method: 'GET',
         url: `/connectors/hubspot/oauth/callback?state=${encodeURIComponent(state)}&code=auth-code-123`,
+        headers: { cookie: alice.cookie },
       });
       expect(res.statusCode).toBe(200);
       const body = JSON.parse(res.body) as { connectorAccountId: string };
@@ -177,7 +177,7 @@ describe.skipIf(!DATABASE_URL)(
       const account = await prisma.connectorAccount.findUnique({
         where: { id: body.connectorAccountId },
       });
-      expect(account?.orgId).toBe(orgA);
+      expect(account?.orgId).toBe(alice.orgId);
       expect(account?.kind).toBe('hubspot');
       expect(account?.authMode).toBe('oauth');
       expect(account?.status).toBe('active');
@@ -200,6 +200,7 @@ describe.skipIf(!DATABASE_URL)(
       const res = await app.inject({
         method: 'GET',
         url: '/connectors/hubspot/oauth/callback?state=never-issued&code=x',
+        headers: { cookie: alice.cookie },
       });
       expect(res.statusCode).toBe(404);
       const accounts = await prisma.connectorAccount.count();
@@ -207,7 +208,7 @@ describe.skipIf(!DATABASE_URL)(
     });
 
     it('GET /callback rejects replay of an already-consumed state → 404', async () => {
-      const { state } = await startFlow(orgA);
+      const { state } = await startFlow(alice.cookie);
       oauthTokensCreate.mockResolvedValueOnce({
         accessToken: 'access-1',
         refreshToken: 'refresh-1',
@@ -216,18 +217,20 @@ describe.skipIf(!DATABASE_URL)(
       const first = await app.inject({
         method: 'GET',
         url: `/connectors/hubspot/oauth/callback?state=${encodeURIComponent(state)}&code=auth-1`,
+        headers: { cookie: alice.cookie },
       });
       expect(first.statusCode).toBe(200);
 
       const replay = await app.inject({
         method: 'GET',
         url: `/connectors/hubspot/oauth/callback?state=${encodeURIComponent(state)}&code=auth-2`,
+        headers: { cookie: alice.cookie },
       });
       expect(replay.statusCode).toBe(404);
     });
 
     it('GET /callback rejects expired state → 400 + cleans up the row', async () => {
-      const { state } = await startFlow(orgA);
+      const { state } = await startFlow(alice.cookie);
       // Backdate expiresAt so the inline TTL check trips.
       await prisma.oAuthState.update({
         where: { state },
@@ -237,6 +240,7 @@ describe.skipIf(!DATABASE_URL)(
       const res = await app.inject({
         method: 'GET',
         url: `/connectors/hubspot/oauth/callback?state=${encodeURIComponent(state)}&code=auth-code`,
+        headers: { cookie: alice.cookie },
       });
       expect(res.statusCode).toBe(400);
       expect(oauthTokensCreate).not.toHaveBeenCalled();
@@ -249,21 +253,23 @@ describe.skipIf(!DATABASE_URL)(
       const res = await app.inject({
         method: 'GET',
         url: '/connectors/hubspot/oauth/callback?code=abc',
+        headers: { cookie: alice.cookie },
       });
       expect(res.statusCode).toBe(400);
     });
 
     it('GET /callback without code → 400', async () => {
-      const { state } = await startFlow(orgA);
+      const { state } = await startFlow(alice.cookie);
       const res = await app.inject({
         method: 'GET',
         url: `/connectors/hubspot/oauth/callback?state=${encodeURIComponent(state)}`,
+        headers: { cookie: alice.cookie },
       });
       expect(res.statusCode).toBe(400);
     });
 
     it('GET /callback propagates vendor exchange errors + leaves no account behind', async () => {
-      const { state } = await startFlow(orgA);
+      const { state } = await startFlow(alice.cookie);
       const err = new Error('HTTP 400') as Error & { code: number };
       err.code = 400;
       oauthTokensCreate.mockRejectedValueOnce(err);
@@ -271,6 +277,7 @@ describe.skipIf(!DATABASE_URL)(
       const res = await app.inject({
         method: 'GET',
         url: `/connectors/hubspot/oauth/callback?state=${encodeURIComponent(state)}&code=bad`,
+        headers: { cookie: alice.cookie },
       });
       expect(res.statusCode).toBeGreaterThanOrEqual(500); // unhandled → 500
       const count = await prisma.connectorAccount.count();
@@ -280,32 +287,28 @@ describe.skipIf(!DATABASE_URL)(
       expect(row).toBeNull();
     });
 
-    it('orgA cannot use orgB-issued state (kind+state are bound at /start)', async () => {
-      const { state: stateA } = await startFlow(orgA);
-      oauthTokensCreate.mockResolvedValueOnce({
-        accessToken: 'access-1',
-        refreshToken: 'refresh-1',
-        expiresIn: 1800,
-      });
-      // Whoever calls /callback with stateA will create the account against orgA,
-      // not whichever orgId they spoof — the runtime never reads orgId from
-      // query params on /callback. Verify the persisted account is orgA's.
+    it('bob cannot consume alice-issued state → 403 (defense in depth)', async () => {
+      const { state: stateA } = await startFlow(alice.cookie);
+      // bob has a valid session but a different orgId — the state row's
+      // orgId is alice's. The controller compares row.orgId vs session.orgId
+      // and rejects.
       const res = await app.inject({
         method: 'GET',
         url: `/connectors/hubspot/oauth/callback?state=${encodeURIComponent(stateA)}&code=c`,
+        headers: { cookie: bob.cookie },
       });
-      expect(res.statusCode).toBe(200);
-      const body = JSON.parse(res.body) as { connectorAccountId: string };
-      const acct = await prisma.connectorAccount.findUnique({
-        where: { id: body.connectorAccountId },
+      expect(res.statusCode).toBe(403);
+      expect(oauthTokensCreate).not.toHaveBeenCalled();
+      // State row still exists — only successful or expired callbacks delete.
+      const row = await prisma.oAuthState.findUnique({
+        where: { state: stateA },
       });
-      expect(acct?.orgId).toBe(orgA);
-      expect(acct?.orgId).not.toBe(orgB);
+      expect(row).not.toBeNull();
     });
 
     it('reconnect: second OAuth flow for the same org rotates credentials + bumps version', async () => {
       // First connection
-      const { state: state1 } = await startFlow(orgA);
+      const { state: state1 } = await startFlow(alice.cookie);
       oauthTokensCreate.mockResolvedValueOnce({
         accessToken: 'access-1',
         refreshToken: 'refresh-1',
@@ -314,13 +317,14 @@ describe.skipIf(!DATABASE_URL)(
       const first = await app.inject({
         method: 'GET',
         url: `/connectors/hubspot/oauth/callback?state=${encodeURIComponent(state1)}&code=c1`,
+        headers: { cookie: alice.cookie },
       });
       const { connectorAccountId: id1 } = JSON.parse(first.body) as {
         connectorAccountId: string;
       };
 
       // Second connection (user re-authed)
-      const { state: state2 } = await startFlow(orgA);
+      const { state: state2 } = await startFlow(alice.cookie);
       oauthTokensCreate.mockResolvedValueOnce({
         accessToken: 'access-2',
         refreshToken: 'refresh-2',
@@ -329,6 +333,7 @@ describe.skipIf(!DATABASE_URL)(
       const second = await app.inject({
         method: 'GET',
         url: `/connectors/hubspot/oauth/callback?state=${encodeURIComponent(state2)}&code=c2`,
+        headers: { cookie: alice.cookie },
       });
       const { connectorAccountId: id2 } = JSON.parse(second.body) as {
         connectorAccountId: string;

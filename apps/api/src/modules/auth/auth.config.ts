@@ -57,13 +57,17 @@ async function sendMagicLink(
   prisma: PrismaClient,
   data: { email: string; url: string; token: string },
 ): Promise<void> {
-  const isDev =
-    process.env.NODE_ENV !== 'production' && process.env.NODE_ENV !== 'test';
-  if (isDev) {
-    // eslint-disable-next-line no-console
-    console.log(
-      `\n[auth] Magic link for ${data.email}:\n  ${data.url}\n  (token ${data.token.slice(0, 8)}…, expires in ${MAGIC_LINK_EXPIRY_SECONDS}s)\n`,
-    );
+  // "Not production" covers both development AND test. In tests this just
+  // means the link writes to stdout; the test harness reads it back from
+  // the Verification table directly (see createTestSession).
+  const isProd = process.env.NODE_ENV === 'production';
+  if (!isProd) {
+    if (process.env.NODE_ENV !== 'test') {
+      // eslint-disable-next-line no-console
+      console.log(
+        `\n[auth] Magic link for ${data.email}:\n  ${data.url}\n  (token ${data.token.slice(0, 8)}…, expires in ${MAGIC_LINK_EXPIRY_SECONDS}s)\n`,
+      );
+    }
     return;
   }
   // Resend integration lands when we have a prod deploy target. Fail loud

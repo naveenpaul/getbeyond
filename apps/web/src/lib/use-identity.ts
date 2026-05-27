@@ -1,21 +1,13 @@
 'use client';
 
 import { useSession } from './auth-client';
-import { env } from './env';
 
 /**
- * Resolves the current actor's identity for API calls (T6.4).
+ * Resolves the current actor's identity for UI display purposes only.
  *
- * Returns:
- *   - `orgId` + `userId` from the better-auth session when signed in
- *   - the dev fallbacks from env (NEXT_PUBLIC_DEV_*) when not signed in
- *     AND the fallbacks are set — useful when running against the seed-dev
- *     path without going through the magic-link flow
- *   - null + `loading` while better-auth's session check is in flight
- *   - null + `signedOut` when neither session nor fallback is available
- *
- * This is the only place that should know about both sources. Components
- * call this and treat the result as a single source of truth.
+ * The API derives identity from the session cookie via AuthGuard — no
+ * client code should pass orgId/userId in request bodies. This hook is
+ * solely for showing the user's name/email in the UI.
  */
 
 interface Identity {
@@ -26,7 +18,7 @@ interface Identity {
 }
 
 interface IdentityState {
-  status: 'loading' | 'authenticated' | 'fallback' | 'signed_out';
+  status: 'loading' | 'authenticated' | 'signed_out';
   identity: Identity | null;
 }
 
@@ -55,19 +47,6 @@ export function useIdentity(): IdentityState {
         },
       };
     }
-  }
-
-  // No session — fall back to env-derived dev identity if present.
-  if (env.devOrgId && env.devUserId) {
-    return {
-      status: 'fallback',
-      identity: {
-        orgId: env.devOrgId,
-        userId: env.devUserId,
-        email: null,
-        name: null,
-      },
-    };
   }
 
   return { status: 'signed_out', identity: null };

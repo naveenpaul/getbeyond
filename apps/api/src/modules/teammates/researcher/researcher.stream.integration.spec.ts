@@ -30,6 +30,8 @@ import {
 } from '@nestjs/platform-fastify';
 import { PrismaClient } from '@prisma/client';
 import type Anthropic from '@anthropic-ai/sdk';
+import { createAuth } from '../../auth/auth.config';
+import { createTestSession } from '../../auth/test-session';
 
 const DATABASE_URL = process.env.DATABASE_URL;
 const STREAM_DEADLINE_MS = 15_000;
@@ -123,9 +125,8 @@ describe.skipIf(!DATABASE_URL)(
   () => {
     let app: NestFastifyApplication;
     let prisma: PrismaClient;
+    let auth: ReturnType<typeof createAuth>;
     let baseUrl: string;
-    let orgA: string;
-    let orgB: string;
     let originalFetch: typeof fetch;
 
     beforeAll(async () => {
@@ -140,6 +141,7 @@ describe.skipIf(!DATABASE_URL)(
       process.env.CREDENTIAL_MASTER_KEY = Buffer.from(
         new Uint8Array(32).fill(7),
       ).toString('base64');
+      process.env.AUTH_SECRET = 'test-auth-secret-32-chars-padding-to-match';
 
       originalFetch = globalThis.fetch;
 
@@ -164,6 +166,7 @@ describe.skipIf(!DATABASE_URL)(
         datasources: { db: { url: DATABASE_URL! } },
       });
       await prisma.$connect();
+      auth = createAuth(prisma);
     });
 
     afterAll(async () => {
@@ -180,7 +183,8 @@ describe.skipIf(!DATABASE_URL)(
           contact_sources, contact_emails, contact_list_members, contact_lists,
           contacts, sync_runs, oauth_states, connector_accounts,
           tool_calls, model_calls, citations, agent_runs,
-          voices, company_brains, users, organizations
+          voices, company_brains, sessions, accounts, verifications,
+          users, organizations
         RESTART IDENTITY CASCADE
       `);
       await prisma
@@ -188,10 +192,6 @@ describe.skipIf(!DATABASE_URL)(
           `TRUNCATE TABLE pgboss.job, pgboss.archive RESTART IDENTITY`,
         )
         .catch(() => {});
-      const o1 = await prisma.organization.create({ data: { name: 'OrgA' } });
-      const o2 = await prisma.organization.create({ data: { name: 'OrgB' } });
-      orgA = o1.id;
-      orgB = o2.id;
     });
 
     function scriptFetch(handlers: Array<(url: string) => Response | null>) {
@@ -226,6 +226,7 @@ describe.skipIf(!DATABASE_URL)(
     }
 
     it('streams the full event sequence end-to-end', async () => {
+      const alice = await createTestSession(prisma, auth, 'alice@test.com');
       scriptFetch([
         (url) =>
           url.startsWith('https://api.search.brave.com')
@@ -287,12 +288,11 @@ describe.skipIf(!DATABASE_URL)(
         `${baseUrl}/teammates/researcher/run`,
         {
           method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({
-            orgId: orgA,
-            triggeredBy: 'usr_test',
-            target: 'Acme',
-          }),
+          headers: {
+            'content-type': 'application/json',
+            cookie: alice.cookie,
+          },
+          body: JSON.stringify({ target: 'Acme' }),
         },
       );
       expect(enqueueRes.status).toBe(202);
@@ -300,8 +300,8 @@ describe.skipIf(!DATABASE_URL)(
 
       // Open the stream IMMEDIATELY (worker may not have picked up the job yet).
       const streamRes = await originalFetch(
-        `${baseUrl}/teammates/researcher/runs/${runId}/stream?orgId=${orgA}`,
-        { headers: { accept: 'text/event-stream' } },
+        `${baseUrl}/teammates/researcher/runs/${runId}/stream`,
+        { headers: { accept: 'text/event-stream', cookie: alice.cookie } },
       );
       expect(streamRes.status).toBe(200);
       expect(streamRes.headers.get('content-type')).toContain('text/event-stream');
@@ -334,6 +334,7 @@ describe.skipIf(!DATABASE_URL)(
     });
 
     it('mid-run connect replays buffered events from the bus', async () => {
+      const alice = await createTestSession(prisma, auth, 'alice@test.com');
       // Two-turn run; the test waits 50 ms before opening the stream to
       // give the worker a head start.
       scriptFetch([
@@ -372,12 +373,11 @@ describe.skipIf(!DATABASE_URL)(
         `${baseUrl}/teammates/researcher/run`,
         {
           method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({
-            orgId: orgA,
-            triggeredBy: 'u',
-            target: 'x',
-          }),
+          headers: {
+            'content-type': 'application/json',
+            cookie: alice.cookie,
+          },
+          body: JSON.stringify({ target: 'x' }),
         },
       );
       const { runId } = (await enqueueRes.json()) as { runId: string };
@@ -386,7 +386,8 @@ describe.skipIf(!DATABASE_URL)(
       await new Promise((r) => setTimeout(r, 30));
 
       const streamRes = await originalFetch(
-        `${baseUrl}/teammates/researcher/runs/${runId}/stream?orgId=${orgA}`,
+        `${baseUrl}/teammates/researcher/runs/${runId}/stream`,
+        { headers: { cookie: alice.cookie } },
       );
       const events = await consumeStream(
         streamRes.body!,
@@ -404,33 +405,39 @@ describe.skipIf(!DATABASE_URL)(
     });
 
     it('unknown run id → 404 (stream never opens)', async () => {
+      const alice = await createTestSession(prisma, auth, 'alice@test.com');
       const res = await originalFetch(
-        `${baseUrl}/teammates/researcher/runs/does-not-exist/stream?orgId=${orgA}`,
+        `${baseUrl}/teammates/researcher/runs/does-not-exist/stream`,
+        { headers: { cookie: alice.cookie } },
       );
       expect(res.status).toBe(404);
     });
 
     it('cross-org access → 403', async () => {
+      const alice = await createTestSession(prisma, auth, 'alice@test.com');
+      const bob = await createTestSession(prisma, auth, 'bob@test.com');
+      // Alice's run, Bob's session.
       const run = await prisma.agentRun.create({
         data: {
-          orgId: orgA,
+          orgId: alice.orgId,
           teammate: 'researcher',
-          triggeredBy: 'u',
+          triggeredBy: alice.userId,
           status: 'running',
           inputContext: {},
         },
       });
       const res = await originalFetch(
-        `${baseUrl}/teammates/researcher/runs/${run.id}/stream?orgId=${orgB}`,
+        `${baseUrl}/teammates/researcher/runs/${run.id}/stream`,
+        { headers: { cookie: bob.cookie } },
       );
       expect(res.status).toBe(403);
     });
 
-    it('missing orgId → 400', async () => {
+    it('no session → 401', async () => {
       const res = await originalFetch(
         `${baseUrl}/teammates/researcher/runs/anything/stream`,
       );
-      expect(res.status).toBe(400);
+      expect(res.status).toBe(401);
     });
 
     it('already-terminal run → synthesizes a terminal event + closes', async () => {
@@ -438,18 +445,20 @@ describe.skipIf(!DATABASE_URL)(
       // connects 30 min later, the snapshot is empty. The endpoint should
       // synthesize a terminal event from the DB row so the client doesn't
       // hang forever.
+      const alice = await createTestSession(prisma, auth, 'alice@test.com');
       const run = await prisma.agentRun.create({
         data: {
-          orgId: orgA,
+          orgId: alice.orgId,
           teammate: 'researcher',
-          triggeredBy: 'u',
+          triggeredBy: alice.userId,
           status: 'completed',
           completedAt: new Date(),
           inputContext: {},
         },
       });
       const streamRes = await originalFetch(
-        `${baseUrl}/teammates/researcher/runs/${run.id}/stream?orgId=${orgA}`,
+        `${baseUrl}/teammates/researcher/runs/${run.id}/stream`,
+        { headers: { cookie: alice.cookie } },
       );
       expect(streamRes.status).toBe(200);
       const events = await consumeStream(

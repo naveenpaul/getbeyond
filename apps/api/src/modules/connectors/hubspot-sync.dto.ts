@@ -3,15 +3,12 @@ import { z } from 'zod';
 /**
  * Zod schema for the POST /connectors/hubspot/sync body.
  *
- * Pre-auth stub: `orgId` + `triggeredBy` live in the body. When the real
- * auth middleware lands, both come from OrgContext and this DTO shrinks
- * to `{ connectorAccountId, listId }`.
+ * Identity (orgId, triggeredBy) is derived from the session by AuthGuard;
+ * the body only carries the work-defining fields.
  */
 export const HubspotSyncRequestSchema = z.object({
-  orgId: z.string().min(1, 'orgId is required'),
   connectorAccountId: z.string().min(1, 'connectorAccountId is required'),
   listId: z.string().min(1, 'listId is required'),
-  triggeredBy: z.string().min(1, 'triggeredBy is required'),
 });
 
 export type HubspotSyncRequest = z.infer<typeof HubspotSyncRequestSchema>;

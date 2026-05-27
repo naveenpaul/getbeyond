@@ -16,22 +16,18 @@ import { useIdentity } from '@/lib/use-identity';
  */
 export function ResearchRunForm(): React.JSX.Element {
   const router = useRouter();
-  const { identity, status } = useIdentity();
+  const { status } = useIdentity();
   const [target, setTarget] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   async function onSubmit(e: React.FormEvent): Promise<void> {
     e.preventDefault();
-    if (submitting || !target.trim() || !identity) return;
+    if (submitting || !target.trim()) return;
     setSubmitting(true);
     setError(null);
     try {
-      const { runId } = await postResearchRun({
-        orgId: identity.orgId,
-        triggeredBy: identity.userId,
-        target: target.trim(),
-      });
+      const { runId } = await postResearchRun({ target: target.trim() });
       router.push(`/research/${encodeURIComponent(runId)}`);
     } catch (err) {
       setSubmitting(false);
@@ -47,7 +43,7 @@ export function ResearchRunForm(): React.JSX.Element {
 
   // Identity still resolving — disable submit but render the form so the
   // page doesn't flash empty.
-  const identityReady = status === 'authenticated' || status === 'fallback';
+  const identityReady = status === 'authenticated';
 
   return (
     <Card className="mx-auto max-w-2xl">
