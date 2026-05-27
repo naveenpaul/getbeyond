@@ -55,6 +55,8 @@ describe.skipIf(!DATABASE_URL)(
       // CredentialManager refuses to instantiate without a real master key,
       // so seed one for the whole suite.
       process.env.CREDENTIAL_MASTER_KEY = generateMasterKey();
+      process.env.ANTHROPIC_API_KEY ??= "test-anthropic-key";
+      process.env.BRAVE_SEARCH_API_KEY ??= "test-brave-key";
       process.env.HUBSPOT_CLIENT_ID = 'client-id-test';
       process.env.HUBSPOT_CLIENT_SECRET = 'client-secret-test';
       process.env.AUTH_SECRET = 'test-auth-secret-32-chars-padding-to-match';

@@ -60,20 +60,35 @@ export async function createTestSession(
     headers: new Headers(),
   });
 
-  // Step 2: read the freshest token for this email.
-  const verification = await prisma.verification.findFirst({
-    where: { identifier: email },
+  // Step 2: read the freshest verification for this email. better-auth's
+  // magic-link plugin stores the RANDOM TOKEN in `identifier` and the JSON
+  // payload (`{ email, name?, callbackURL?, ... }`) in `value`. We scan
+  // recent rows and parse `value` to find the one for our email.
+  const candidates = await prisma.verification.findMany({
     orderBy: { createdAt: 'desc' },
+    take: 10,
+  });
+  const verification = candidates.find((row) => {
+    try {
+      const parsed = JSON.parse(row.value) as { email?: string };
+      return parsed.email?.toLowerCase() === email.toLowerCase();
+    } catch {
+      return false;
+    }
   });
   if (!verification) {
     throw new Error(
-      `createTestSession: expected a Verification row for ${email}`,
+      `createTestSession: expected a Verification row whose value carries ` +
+        `email=${email}. Recent identifiers: ` +
+        JSON.stringify(candidates.map((c) => c.identifier).slice(0, 5)),
     );
   }
+  // The token Magiclink verify expects is the `identifier`, not `value`.
+  const token = verification.identifier;
 
   // Step 3: verify → Set-Cookie. asResponse:true gives us the raw Response.
   const verifyResponse = await auth.api.magicLinkVerify({
-    query: { token: verification.value, callbackURL },
+    query: { token, callbackURL },
     headers: new Headers(),
     asResponse: true,
   });

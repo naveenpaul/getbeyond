@@ -1,5 +1,12 @@
 import { defineConfig } from 'vitest/config';
 
+/**
+ * Unit-test config — fast feedback, no DB required.
+ *
+ * The authoritative coverage gate lives in vitest.coverage.config.ts, which
+ * runs BOTH unit and integration suites against a live Postgres. This file
+ * exists so `pnpm test` stays a sub-3s loop for everyday iteration.
+ */
 export default defineConfig({
   test: {
     globals: false,
@@ -11,6 +18,10 @@ export default defineConfig({
       '**/*.e2e-spec.ts',
       '**/*.integration.spec.ts',
     ],
+    // Coverage settings retained for ad-hoc local use; thresholds removed
+    // because the integration-tested files would falsely fail this gate.
+    // The CI gate (and the authoritative threshold) lives in
+    // vitest.coverage.config.ts.
     coverage: {
       provider: 'v8',
       reporter: ['text', 'json-summary', 'html', 'lcov'],
@@ -81,14 +92,6 @@ export default defineConfig({
         'src/modules/reapers/sync-run.reaper.ts',
         'src/modules/reapers/draft-action.reaper.ts',
       ],
-      thresholds: {
-        // CLAUDE.md: 95%+ line coverage on logic files.
-        // PR merge is blocked below threshold via CI workflow.
-        lines: 95,
-        functions: 95,
-        branches: 90,
-        statements: 95,
-      },
       reportOnFailure: true,
     },
   },

@@ -13,7 +13,7 @@ import {
   CurrentUser,
   type CurrentUserPayload,
 } from '../auth/current-user.decorator';
-import { normalizeEmail } from './identity';
+import { InvalidEmailError, normalizeEmail } from './identity';
 
 /**
  * Read-only contacts surface (T9.8).
@@ -48,9 +48,16 @@ export class ContactsController {
     if (!email || email.trim().length === 0) {
       throw new BadRequestException('email query parameter is required');
     }
-    const normalized = normalizeEmail(email.trim());
-    if (!normalized) {
-      throw new BadRequestException('email is not a valid address');
+    let normalized: string;
+    try {
+      normalized = normalizeEmail(email.trim());
+    } catch (err) {
+      if (err instanceof InvalidEmailError) {
+        throw new BadRequestException(
+          `email is not a valid address (${err.reason})`,
+        );
+      }
+      throw err;
     }
     const contact = await this.prisma.contact.findFirst({
       where: { orgId: user.orgId, normalizedEmail: normalized },

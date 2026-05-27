@@ -13,6 +13,49 @@ jobs:
   test:
     name: vitest + coverage gate
     runs-on: ubuntu-latest
+
+    # The coverage gate is now the combined unit + integration run
+    # (vitest.coverage.config.ts). Integration specs need a live Postgres
+    # for the TRUNCATE + Prisma round-trips, and the CSV-spill case needs
+    # MinIO for the S3 path.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: getbeyond_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      minio:
+        # Bitnami's image auto-creates buckets via MINIO_DEFAULT_BUCKETS,
+        # which saves us a separate "mc mb" step. The S3-spill test in
+        # csv-import.controller.integration.spec.ts writes into this bucket.
+        image: bitnami/minio:latest
+        env:
+          MINIO_ROOT_USER: minioadmin
+          MINIO_ROOT_PASSWORD: minioadmin
+          MINIO_DEFAULT_BUCKETS: getbeyond-blobs
+        ports:
+          - 9000:9000
+        options: >-
+          --health-cmd "curl -sf http://localhost:9000/minio/health/live || exit 1"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/getbeyond_test
+      S3_ENDPOINT: http://localhost:9000
+      S3_BUCKET: getbeyond-blobs
+      S3_ACCESS_KEY: minioadmin
+      S3_SECRET_KEY: minioadmin
+
     steps:
       - uses: actions/checkout@v4
 
@@ -31,9 +74,13 @@ jobs:
       - name: Generate Prisma client
         run: pnpm --filter '@getbeyond/api' prisma:generate
 
+      - name: Apply migrations to test DB
+        run: pnpm --filter '@getbeyond/api' exec prisma migrate deploy
+
       # CI coverage gate per CLAUDE.md.
-      # Vitest exits non-zero if global coverage <95% or branch coverage <90%.
-      # PR merge is blocked when this step fails.
+      # vitest.coverage.config.ts runs unit + integration suites together.
+      # Vitest exits non-zero if line/statement/function coverage <95% or
+      # branch coverage <90%. PR merge is blocked when this step fails.
       - name: Test with coverage
         run: pnpm --filter '@getbeyond/api' test:coverage
 

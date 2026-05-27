@@ -100,7 +100,9 @@ export function createAuth(prisma: PrismaClient) {
     ]).map((s) => s.trim()),
     database: prismaAdapter(prisma, {
       provider: 'postgresql',
-      usePlural: true, // our @@map calls are plural: users, sessions, accounts, verifications
+      // usePlural: true would expect the Prisma client to expose `verifications`
+      // (plural). Prisma always uses singular camelCase (`prisma.verification`)
+      // regardless of the table-level @@map. Default (singular) is correct.
     }),
     session: {
       expiresIn: SESSION_DURATION_SECONDS,
