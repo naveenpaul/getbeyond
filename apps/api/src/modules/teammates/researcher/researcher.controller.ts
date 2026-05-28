@@ -25,10 +25,7 @@ import {
   RUN_EVENT_BUS,
   type RunEventBus,
 } from '../runtime/run-event-bus';
-import {
-  TERMINAL_RUN_EVENT_TYPES,
-  type RunEvent,
-} from '@getbeyond/shared';
+import { buildRunStreamObservable } from '../runtime/sse-stream';
 import { RESEARCHER_NAME } from './researcher.service';
 import {
   RESEARCHER_RUN_QUEUE,
@@ -39,8 +36,6 @@ import {
   type ResearcherRunEnqueueResponse,
   type ResearcherRunStatusResponse,
 } from './researcher.dto';
-
-const SSE_HEARTBEAT_MS = 15_000;
 
 /**
  * Researcher HTTP endpoints (T4d.2 → T7.3).
@@ -210,75 +205,10 @@ export class ResearcherController {
       throw new ForbiddenException('AgentRun belongs to another org');
     }
 
-    const eventBus = this.eventBus;
-    const runStatus = run.status;
-
-    return new Observable<MessageEvent>((subscriber) => {
-      // Tracking + cleanup handles declared up front so closures below can
-      // reach them. heartbeat may stay undefined when we terminate early
-      // (run was already terminal at connect time).
-      const delivered = new Set<string>();
-      let heartbeat: ReturnType<typeof setInterval> | undefined;
-      let unsubscribeBus: (() => void) | undefined;
-
-      const terminate = (): void => {
-        if (heartbeat) clearInterval(heartbeat);
-        unsubscribeBus?.();
-        subscriber.complete();
-      };
-
-      // We track delivered event identity by (type|at|data-json) — the bus
-      // doesn't assign monotonic ids — to avoid double-emitting the same
-      // event between snapshot-replay and the live subscription.
-      const emit = (event: RunEvent): void => {
-        const key = `${event.type}|${event.at}|${JSON.stringify(event.data)}`;
-        if (delivered.has(key)) return;
-        delivered.add(key);
-        subscriber.next({ type: event.type, data: event });
-        if (TERMINAL_RUN_EVENT_TYPES.has(event.type)) terminate();
-      };
-
-      // Replay buffer first, then subscribe to live events.
-      for (const event of eventBus.snapshot(id)) emit(event);
-      unsubscribeBus = eventBus.subscribe(id, emit);
-
-      // If the run was ALREADY terminal in the DB AND no terminal event is
-      // in the replay buffer (it aged out of the 60s window), synthesize
-      // one from the row so the client doesn't wait forever.
-      const replayHasTerminal = [...delivered].some((key) =>
-        Array.from(TERMINAL_RUN_EVENT_TYPES).some((t) => key.startsWith(`${t}|`)),
-      );
-      if (
-        (runStatus === 'completed' ||
-          runStatus === 'abstained' ||
-          runStatus === 'failed') &&
-        !replayHasTerminal
-      ) {
-        subscriber.next({
-          type: `run_${runStatus}`,
-          data: {
-            type: `run_${runStatus}`,
-            runId: id,
-            at: new Date().toISOString(),
-            data: { synthesized: true, status: runStatus },
-          },
-        });
-        terminate();
-        return () => undefined;
-      }
-
-      heartbeat = setInterval(() => {
-        subscriber.next({
-          type: 'heartbeat',
-          data: { at: new Date().toISOString() },
-        });
-      }, SSE_HEARTBEAT_MS);
-      if (typeof heartbeat.unref === 'function') heartbeat.unref();
-
-      return () => {
-        if (heartbeat) clearInterval(heartbeat);
-        unsubscribeBus?.();
-      };
+    return buildRunStreamObservable({
+      runId: id,
+      runStatus: run.status,
+      eventBus: this.eventBus,
     });
   }
 }

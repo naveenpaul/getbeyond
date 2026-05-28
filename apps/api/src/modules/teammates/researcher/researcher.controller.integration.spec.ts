@@ -212,47 +212,63 @@ describe.skipIf(!DATABASE_URL)(
         () => null,
       ]);
 
-      mockAnthropicCreate
-        .mockResolvedValueOnce(
-          fakeMessage({
-            content: [
-              toolUseBlock('brave_search', { query: 'Acme dental SaaS' }, 'tu-1'),
-            ],
-          }),
-        )
-        .mockResolvedValueOnce(
-          fakeMessage({
-            content: [
-              toolUseBlock('fetch_url', { url: 'https://acme.example/about' }, 'tu-2'),
-            ],
-          }),
-        )
-        .mockImplementationOnce(async () => {
-          const cit = await prisma.citation.findFirst({
-            where: { url: 'https://acme.example/about' },
-          });
-          if (!cit) throw new Error('test: expected Citation by now');
+      // Single mockImplementation that dispatches by call count. Using
+      // mockResolvedValueOnce + mockImplementationOnce here was fragile
+      // because pg-boss retries the worker on any failure (default
+      // retryLimit=2), and each retry consumed more queued mocks until
+      // the chain ran out and returned undefined. With a count-based
+      // dispatcher, the same response fires on every retry-attempt for
+      // the same logical turn.
+      let modelCallCount = 0;
+      mockAnthropicCreate.mockImplementation(async () => {
+        modelCallCount += 1;
+        if (modelCallCount === 1) {
           return fakeMessage({
             content: [
               toolUseBlock(
-                'emit_draft',
-                {
-                  type: 'research_brief',
-                  content: {
-                    headline: 'Acme — dental SaaS, Series A',
-                  },
-                  claims: [
-                    {
-                      text: 'Acme makes SaaS for dental practices.',
-                      citationId: cit.id,
-                    },
-                  ],
-                },
-                'tu-3',
+                'brave_search',
+                { query: 'Acme dental SaaS' },
+                'tu-1',
               ),
             ],
           });
+        }
+        if (modelCallCount === 2) {
+          return fakeMessage({
+            content: [
+              toolUseBlock(
+                'fetch_url',
+                { url: 'https://acme.example/about' },
+                'tu-2',
+              ),
+            ],
+          });
+        }
+        const cit = await prisma.citation.findFirst({
+          where: { url: 'https://acme.example/about' },
         });
+        if (!cit) throw new Error('test: expected Citation by now');
+        return fakeMessage({
+          content: [
+            toolUseBlock(
+              'emit_draft',
+              {
+                type: 'research_brief',
+                content: {
+                  headline: 'Acme — dental SaaS, Series A',
+                },
+                claims: [
+                  {
+                    text: 'Acme makes SaaS for dental practices.',
+                    citationId: cit.id,
+                  },
+                ],
+              },
+              'tu-3',
+            ),
+          ],
+        });
+      });
 
       const enqueueRes = await app.inject({
         method: 'POST',

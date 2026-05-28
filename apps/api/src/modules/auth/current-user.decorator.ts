@@ -20,22 +20,31 @@ export interface CurrentUserPayload {
 }
 
 /**
- * Param decorator that reads the user payload AuthGuard attached to the
- * request. Throws if no payload is present — that means AuthGuard didn't
- * run, which is a wiring bug (apply @UseGuards(AuthGuard) on the controller
- * or method).
+ * Pull the user payload AuthGuard attached to the request. Throws if no
+ * payload is present — that means AuthGuard didn't run, which is a wiring
+ * bug (apply @UseGuards(AuthGuard) on the controller or method).
+ *
+ * Exported separately from the decorator so unit tests can exercise the
+ * 401 branch without wrestling with NestJS's createParamDecorator
+ * internals.
+ */
+export function resolveCurrentUser(ctx: ExecutionContext): CurrentUserPayload {
+  const req = ctx.switchToHttp().getRequest<FastifyRequest>();
+  const user = (req as FastifyRequest & { user?: CurrentUserPayload }).user;
+  if (!user) {
+    // Treat as 401 rather than 500 — defensive: if the decorator runs
+    // before the guard (route misconfig) we still don't leak data.
+    throw new UnauthorizedException(
+      'Missing session — apply @UseGuards(AuthGuard) on this route',
+    );
+  }
+  return user;
+}
+
+/**
+ * Param decorator that wraps `resolveCurrentUser`.
  */
 export const CurrentUser = createParamDecorator(
-  (_data: unknown, ctx: ExecutionContext): CurrentUserPayload => {
-    const req = ctx.switchToHttp().getRequest<FastifyRequest>();
-    const user = (req as FastifyRequest & { user?: CurrentUserPayload }).user;
-    if (!user) {
-      // Treat as 401 rather than 500 — defensive: if the decorator runs
-      // before the guard (route misconfig) we still don't leak data.
-      throw new UnauthorizedException(
-        'Missing session — apply @UseGuards(AuthGuard) on this route',
-      );
-    }
-    return user;
-  },
+  (_data: unknown, ctx: ExecutionContext): CurrentUserPayload =>
+    resolveCurrentUser(ctx),
 );

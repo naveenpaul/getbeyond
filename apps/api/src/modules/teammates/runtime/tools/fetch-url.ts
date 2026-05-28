@@ -49,7 +49,12 @@ const DEFAULT_MAX_TEXT = 8 * 1024;
 const USER_AGENT = 'getbeyond-researcher/0.1 (+https://getbeyond.ai)';
 
 export function buildFetchUrlTool(deps: FetchUrlDeps = {}): AgentTool {
-  const httpFetch = deps.httpFetch ?? fetch;
+  // Resolve the global lazily — capturing at factory-time freezes
+  // `globalThis.fetch` to whatever was bound when this module loaded,
+  // which breaks integration tests that override globalThis.fetch later.
+  const httpFetch: typeof fetch = deps.httpFetch
+    ? deps.httpFetch
+    : (...args) => globalThis.fetch(...args);
   const maxBytes = deps.maxBytes ?? DEFAULT_MAX_BYTES;
   const maxTextLength = deps.maxTextLength ?? DEFAULT_MAX_TEXT;
 

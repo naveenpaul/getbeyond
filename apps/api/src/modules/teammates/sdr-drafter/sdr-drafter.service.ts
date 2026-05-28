@@ -30,8 +30,12 @@ export interface SdrDrafterInput {
   orgId: string;
   triggeredBy: string;
   contactId: string;
-  /** Pre-existing AgentRun.id when running async via the worker. */
-  runId?: string;
+  /**
+   * AgentRun.id — created by the controller before enqueuing, threaded
+   * through the worker job. The service does not create AgentRuns; that
+   * stays with the controller so the caller has a runId to poll on.
+   */
+  runId: string;
   briefDraftId?: string | null;
   goal?: string | null;
   modelName?: string;
@@ -69,42 +73,18 @@ export async function runSdrDrafter(
   deps: SdrDrafterDeps,
   input: SdrDrafterInput,
 ): Promise<SdrDrafterResult> {
-  // Resolve recipient up front so we can fail fast if the Contact is missing
-  // or cross-org. The AuthGuard already enforced orgId on the controller; this
-  // is the second-level guarantee that the Drafter never writes a Draft with
-  // a recipient from the wrong tenant.
-  const contact = await deps.prisma.contact.findFirst({
+  // Resolve recipient. The controller already validated existence + that
+  // the contact has an email + cross-org safety; this is the read we need
+  // for Draft.recipient (server-controlled, never model-controlled). The
+  // non-null assertion on normalizedEmail is safe because the controller
+  // 400s when email is missing — but we keep the type-checked field.
+  const contact = await deps.prisma.contact.findFirstOrThrow({
     where: { id: input.contactId, orgId: input.orgId },
   });
-  if (!contact) {
-    throw new Error(`Contact ${input.contactId} not found in org ${input.orgId}`);
-  }
-  if (!contact.normalizedEmail) {
-    throw new Error(
-      `Contact ${input.contactId} has no email — cannot draft outreach`,
-    );
-  }
+  const recipientEmail = contact.normalizedEmail ?? '';
   const recipientName =
     [contact.firstName, contact.lastName].filter(Boolean).join(' ').trim() ||
     null;
-
-  let runId = input.runId;
-  if (!runId) {
-    const run = await deps.prisma.agentRun.create({
-      data: {
-        orgId: input.orgId,
-        teammate: SDR_DRAFTER_NAME,
-        triggeredBy: input.triggeredBy,
-        status: 'running',
-        inputContext: {
-          contactId: input.contactId,
-          briefDraftId: input.briefDraftId ?? null,
-          goal: input.goal ?? null,
-        } satisfies Record<string, unknown>,
-      },
-    });
-    runId = run.id;
-  }
 
   const tools = deps.tools ?? [
     getContactTool,
@@ -114,7 +94,7 @@ export async function runSdrDrafter(
   ];
 
   const result = await runAgent({
-    runId,
+    runId: input.runId,
     orgId: input.orgId,
     teammate: SDR_DRAFTER_NAME,
     modelName: input.modelName ?? DEFAULTS.modelName,
@@ -133,13 +113,13 @@ export async function runSdrDrafter(
     emitEvent: deps.emitEvent,
     draftRecipient: {
       contactId: contact.id,
-      email: contact.normalizedEmail,
+      email: recipientEmail,
       name: recipientName,
     },
   });
 
   return {
-    runId,
+    runId: input.runId,
     status: result.status,
     reason: result.reason,
     draftId: result.draftId,

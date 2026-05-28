@@ -56,19 +56,13 @@ export class AuthGuard implements CanActivate {
       throw new UnauthorizedException('Sign in to access this resource');
     }
 
+    // activeOrgId is NOT NULL in the schema and atomically set by the
+    // user.create hooks. The membership lookup below is the trust check.
     const user = result.user as {
       id: string;
       email: string;
-      activeOrgId?: string;
+      activeOrgId: string;
     };
-    if (!user.activeOrgId) {
-      // The user.create hooks set activeOrgId atomically with the row.
-      // A missing value means the session predates this migration — force
-      // a fresh sign-in.
-      throw new UnauthorizedException(
-        'Session is missing an active org — sign in again',
-      );
-    }
 
     const membership = await this.prisma.orgMembership.findUnique({
       where: { userId_orgId: { userId: user.id, orgId: user.activeOrgId } },

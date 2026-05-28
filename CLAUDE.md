@@ -46,6 +46,41 @@ Read the full version in `../gtm_teammates_plan.md`. The non-negotiable ones:
    advances state machine atomically. Idempotency keys on all CRM writes.
 8. **Hard cost budget per AgentRun.** Exceeding aborts the run; user must raise it.
 
+## System design stance
+
+Treat `getbeyond` as a **vertical GTM application with agent internals**, not as
+a generic agent framework / AgentOS / infrastructure platform.
+
+- **Product first.** Optimize for the founder GTM loop: research → draft →
+  approve → send / write-back → audit. Do not add generic orchestration,
+  reusable "agent teams", or broad platform abstractions unless the GTM product
+  truly needs them.
+- **Boring, replaceable infrastructure.** Prefer proven defaults (`NestJS`,
+  `Postgres`, `Prisma`, `pg-boss`, S3/MinIO) over novelty. Scale by splitting
+  execution planes and isolating queues before introducing new infrastructure.
+- **Business state lives in the DB, not only in the queue vendor.** Queue
+  systems are delivery mechanisms; the source of truth is the app data model +
+  state machines (`DraftAction`, `SyncRun`, `AgentRun`, etc.). This is what
+  keeps retries, reapers, dead-letter recovery, and future queue migrations
+  sane.
+- **Vendor boundaries must stay clean.** Infrastructure choices should be
+  swappable at the edges. Do not leak queue-vendor, storage-vendor, or
+  model-vendor types deep into feature code.
+- **Abstract only where we expect real replacement pressure.** Queue backend,
+  object storage, LLM provider, and embeddings/search providers should be easy
+  to swap. The database schema and core product model are the stable center.
+- **Assume the first bottlenecks are operational, not theoretical.** The likely
+  failure order is worker contention, Postgres contention, audit-log growth,
+  connector unreliability, retry storms, and browser/extraction load. Design
+  observability and circuit-breakers around those first.
+- **Separate planes early.** API handles auth/reads/approvals/enqueue. Workers
+  handle agent execution, syncs, extraction, and side effects. Heavy backfills
+  must not starve user-facing jobs.
+- **If a dependency becomes the bottleneck, replace it surgically.** Example:
+  `pg-boss` is a good default now, but we should be able to swap it for
+  BullMQ/Redis, SQS, or another queue by changing the queue boundary rather than
+  rewriting product logic.
+
 ## NestJS dependency injection — pitfall
 
 **Use explicit `@Inject(TypeName)` on constructor parameters, not the

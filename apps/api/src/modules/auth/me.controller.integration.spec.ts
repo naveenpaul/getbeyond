@@ -126,6 +126,16 @@ describe.skipIf(!DATABASE_URL)('GET /me + POST /me/active-org', () => {
     expect(stored?.activeOrgId).toBe(otherOrg.id);
   });
 
+  it('POST /me/active-org returns 400 on malformed body', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/me/active-org',
+      headers: { cookie: alice.cookie, 'content-type': 'application/json' },
+      payload: JSON.stringify({ wrongField: 'value' }),
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
   it('POST /me/active-org returns 403 when the user is not a member of the target org', async () => {
     const strangerOrg = await prisma.organization.create({
       data: { name: 'Stranger Org' },

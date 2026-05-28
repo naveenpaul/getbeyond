@@ -101,7 +101,11 @@ describe.skipIf(!DATABASE_URL)(
     });
 
     beforeEach(async () => {
-      vi.clearAllMocks();
+      // resetAllMocks clears BOTH call history and any leftover queued
+      // *Once implementations from prior tests. clearAllMocks alone
+      // leaves Once queues intact, which can shift a 5xx mock past a
+      // stale resolved value from the previous test.
+      vi.resetAllMocks();
       await prisma.$executeRawUnsafe(`
         TRUNCATE TABLE
           draft_actions, claims, drafts,
@@ -359,6 +363,15 @@ describe.skipIf(!DATABASE_URL)(
         url: '/connectors/hubspot/sync-runs/anything',
       });
       expect(res.statusCode).toBe(401);
+    });
+
+    it('GET sync-runs/:id returns 404 for unknown id', async () => {
+      const res = await app.inject({
+        method: 'GET',
+        url: '/connectors/hubspot/sync-runs/cuid_does_not_exist',
+        headers: { cookie: alice.cookie },
+      });
+      expect(res.statusCode).toBe(404);
     });
 
     // ─── Worker error surfacing ──────────────────────────────────────

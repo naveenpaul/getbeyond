@@ -46,7 +46,11 @@ const BRAVE_SEARCH_URL = 'https://api.search.brave.com/res/v1/web/search';
 
 export function buildBraveSearchTool(deps: BraveSearchDeps = {}): AgentTool {
   const apiKeyFromEnv = deps.apiKey ?? process.env.BRAVE_SEARCH_API_KEY ?? '';
-  const httpFetch = deps.httpFetch ?? fetch;
+  // Resolve globalThis.fetch lazily so integration tests that swap it
+  // mid-process see the new function.
+  const httpFetch: typeof fetch = deps.httpFetch
+    ? deps.httpFetch
+    : (...args) => globalThis.fetch(...args);
 
   return {
     name: 'brave_search',
