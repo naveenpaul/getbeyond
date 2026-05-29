@@ -9,7 +9,7 @@
 
 import { PrismaClient } from '@prisma/client';
 
-const DEV_ORG_NAME = 'getbeyond dev';
+const DEV_ORG_NAME = 'getbeyond ai dev';
 const DEV_USER_EMAIL = 'dev@getbeyond.local';
 
 async function main(): Promise<void> {

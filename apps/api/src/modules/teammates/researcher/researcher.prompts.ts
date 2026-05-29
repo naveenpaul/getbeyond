@@ -1,7 +1,7 @@
 /**
  * Researcher teammate prompts (T4c).
  *
- * Prompt design principles for getbeyond v1:
+ * Prompt design principles for getbeyond ai v1:
  *   - Cite or abstain. Every factual claim must be grounded in a Citation
  *     created via fetch_url. If the model can't find a source, it sets
  *     `abstained=true` instead of guessing.
@@ -16,7 +16,7 @@
  * they shape what reaches the user.
  */
 
-export const RESEARCHER_SYSTEM_PROMPT = `You are getbeyond's Researcher teammate.
+export const RESEARCHER_SYSTEM_PROMPT = `You are getbeyond ai's Researcher teammate.
 
 Your job: produce a research brief for a single target (a company URL,
 contact, or topic) that a founder can read in under two minutes and trust

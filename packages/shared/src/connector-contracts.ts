@@ -1,7 +1,7 @@
 /**
  * Adapter contracts (eng-review pass-2 D1 + adapter architecture section).
  *
- * Two interfaces define the entire vendor surface of getbeyond. Anything that
+ * Two interfaces define the entire vendor surface of getbeyond ai. Anything that
  * pulls contacts in implements `SourceAdapter`; anything that writes back out
  * (send email, log activity, update CRM field) implements `DestinationAdapter`.
  *

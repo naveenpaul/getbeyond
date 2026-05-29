@@ -1,4 +1,4 @@
-# CLAUDE.md — getbeyond
+# CLAUDE.md — getbeyond ai
 
 Project-specific instructions for Claude working in this repo. The full plan and
 engineering context lives one level up at `../gtm_teammates_plan.md`. Read that
@@ -48,7 +48,7 @@ Read the full version in `../gtm_teammates_plan.md`. The non-negotiable ones:
 
 ## System design stance
 
-Treat `getbeyond` as a **vertical GTM application with agent internals**, not as
+Treat `getbeyond ai` as a **vertical GTM application with agent internals**, not as
 a generic agent framework / AgentOS / infrastructure platform.
 
 - **Product first.** Optimize for the founder GTM loop: research → draft →

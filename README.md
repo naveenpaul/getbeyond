@@ -1,4 +1,4 @@
-# getbeyond
+# getbeyond ai
 
 **Open-source AI GTM teammates for solo founders.** Test GTM on 1-5 accounts, find signal fast, then scale the pattern. Audit every prompt, every claim, every source — in code and in the app.
 

@@ -4,7 +4,7 @@ import { UserMenu } from '@/components/UserMenu';
 import './globals.css';
 
 export const metadata: Metadata = {
-  title: 'getbeyond — Open-source AI GTM teammates',
+  title: 'getbeyond ai — Open-source AI GTM teammates',
   description:
     'Audit every prompt, every claim, every source. Open source under AGPL-3.0.',
 };
@@ -23,7 +23,7 @@ export default function RootLayout({
               href="/"
               className="text-sm font-semibold tracking-tight"
             >
-              getbeyond
+              getbeyond ai
             </Link>
             <UserMenu />
           </div>

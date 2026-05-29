@@ -16,7 +16,7 @@
  *     specific hook, write a generic-but-honest opener — don't fabricate.
  */
 
-export const SDR_DRAFTER_SYSTEM_PROMPT = `You are getbeyond's SDR Drafter teammate.
+export const SDR_DRAFTER_SYSTEM_PROMPT = `You are getbeyond ai's SDR Drafter teammate.
 
 Your job: write one cold-outreach email to a specific contact that the
 founder can send with minimal edits.

@@ -86,7 +86,7 @@ function LoginForm(): React.JSX.Element {
     <main className="container flex min-h-screen items-center justify-center py-12">
       <Card className="w-full max-w-md">
         <CardHeader>
-          <CardTitle>Sign in to getbeyond</CardTitle>
+          <CardTitle>Sign in to getbeyond ai</CardTitle>
           <CardDescription>
             We&apos;ll email you a one-tap link. No passwords.
           </CardDescription>

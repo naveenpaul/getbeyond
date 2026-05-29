@@ -49,7 +49,7 @@ const MAGIC_LINK_EXPIRY_SECONDS = 60 * 15; // 15 min
  * rename later.
  */
 function deriveOrgName(email: string): string {
-  const local = email.split('@')[0] ?? 'getbeyond';
+  const local = email.split('@')[0] ?? 'getbeyond ai';
   return `${local}'s organization`;
 }
 
