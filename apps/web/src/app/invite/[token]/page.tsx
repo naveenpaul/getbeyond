@@ -2,7 +2,7 @@
 
 import { use, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { Loader2, MailCheck, ShieldAlert } from 'lucide-react';
+import { Loader2, ShieldAlert } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import {
@@ -19,7 +19,7 @@ import {
   lookupInvite,
   switchActiveOrg,
 } from '@/lib/api-client';
-import { signIn, useSession } from '@/lib/auth-client';
+import { signIn, signUp, useSession } from '@/lib/auth-client';
 
 /**
  * Invite landing.
@@ -29,10 +29,11 @@ import { signIn, useSession } from '@/lib/auth-client';
  *      → flip active org → land on /research/new.
  *   3. If signed in with a different email → tell the user to sign out
  *      and try again with the invited address.
- *   4. If signed out → magic-link form pre-filled with the invited email
- *      (locked). After sign-in, the user.create hook detours new accounts
- *      straight into the inviting org; the page re-renders post-redirect
- *      and the user can click Accept to complete (or land already-attached).
+ *   4. If signed out → email+password form, email locked to the invited
+ *      address. New invitees create an account, returning users sign in.
+ *      The user.create hook detours new accounts straight into the inviting
+ *      org; autoSignIn refreshes the page into the signed-in branch so the
+ *      user can click Accept (or lands already-attached).
  *
  * Expired / revoked / accepted invites show terminal messages with no CTA.
  */
@@ -224,29 +225,41 @@ function SignInToAcceptPanel({
   invite: InviteLookupResponse;
   token: string;
 }): React.JSX.Element {
+  const router = useRouter();
   const [submitting, setSubmitting] = useState(false);
-  const [sent, setSent] = useState(false);
+  const [password, setPassword] = useState('');
+  const [mode, setMode] = useState<'sign-in' | 'sign-up'>('sign-up');
   const [error, setError] = useState<string | null>(null);
+  const isSignUp = mode === 'sign-up';
 
   async function onSubmit(e: React.FormEvent): Promise<void> {
     e.preventDefault();
-    if (submitting) return;
+    if (submitting || password.length < 8) return;
     setSubmitting(true);
     setError(null);
     try {
-      // After sign-in we come back to this page (the user.create hook
-      // attaches new users straight into the inviting org; existing users
-      // will see the Accept button when they return).
-      const { error: signInError } = await signIn.magicLink({
-        email: invite.invitedEmail,
-        callbackURL: `/invite/${token}`,
-      });
-      if (signInError) {
-        setError(signInError.message ?? 'Could not send magic link');
+      // Email is locked to the invite. The user.create hook attaches new
+      // accounts straight into the inviting org; autoSignIn then leaves us
+      // authenticated, so we refresh into the signed-in (Accept) branch.
+      const { error: authError } = isSignUp
+        ? await signUp.email({
+            email: invite.invitedEmail,
+            password,
+            name: invite.invitedEmail.split('@')[0] || invite.invitedEmail,
+          })
+        : await signIn.email({ email: invite.invitedEmail, password });
+      if (authError) {
+        setError(
+          authError.message ??
+            (isSignUp
+              ? 'Could not create account'
+              : 'Invalid email or password'),
+        );
         setSubmitting(false);
         return;
       }
-      setSent(true);
+      void token;
+      router.refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unknown error');
       setSubmitting(false);
@@ -259,55 +272,88 @@ function SignInToAcceptPanel({
         <CardTitle>Join {invite.orgName ?? 'this organization'}</CardTitle>
         <CardDescription>
           You&apos;ve been invited to join as <strong>{invite.role}</strong>.
-          Sign in to accept.
+          {isSignUp
+            ? ' Set a password to create your account and join.'
+            : ' Sign in to accept.'}
         </CardDescription>
       </CardHeader>
       <CardContent>
-        {sent ? (
-          <div className="space-y-3 text-sm">
-            <div className="flex items-center gap-2 text-emerald-700 dark:text-emerald-400">
-              <MailCheck className="h-4 w-4" />
-              <span>Magic link sent to {invite.invitedEmail}</span>
-            </div>
-            <p className="text-muted-foreground">
-              Open the link from your inbox to finish accepting the invite.
+        <form className="space-y-4" onSubmit={onSubmit}>
+          <div className="space-y-2">
+            <label htmlFor="invite-email" className="text-sm font-medium">
+              Email
+            </label>
+            <Input
+              id="invite-email"
+              type="email"
+              readOnly
+              value={invite.invitedEmail}
+              aria-readonly
+              autoComplete="email"
+            />
+            <p className="text-xs text-muted-foreground">
+              The invite is locked to this address.
             </p>
           </div>
-        ) : (
-          <form className="space-y-4" onSubmit={onSubmit}>
-            <div className="space-y-2">
-              <label htmlFor="email" className="text-sm font-medium">
-                Email
-              </label>
-              <Input
-                id="email"
-                type="email"
-                readOnly
-                value={invite.invitedEmail}
-                aria-readonly
-              />
-              <p className="text-xs text-muted-foreground">
-                The invite is locked to this address.
-              </p>
+
+          <div className="space-y-2">
+            <label htmlFor="invite-password" className="text-sm font-medium">
+              Password
+            </label>
+            <Input
+              id="invite-password"
+              type="password"
+              required
+              minLength={8}
+              autoFocus
+              autoComplete={isSignUp ? 'new-password' : 'current-password'}
+              placeholder={
+                isSignUp ? 'At least 8 characters' : 'Your password'
+              }
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              disabled={submitting}
+            />
+          </div>
+
+          {error ? (
+            <div className="rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
+              {error}
             </div>
+          ) : null}
 
-            {error ? (
-              <div className="rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
-                {error}
-              </div>
-            ) : null}
+          <Button
+            type="submit"
+            className="w-full"
+            disabled={submitting || password.length < 8}
+          >
+            {submitting ? (
+              <>
+                <Loader2 className="animate-spin" />{' '}
+                {isSignUp ? 'Creating account…' : 'Signing in…'}
+              </>
+            ) : isSignUp ? (
+              'Create account & join'
+            ) : (
+              'Sign in & join'
+            )}
+          </Button>
+        </form>
 
-            <Button type="submit" className="w-full" disabled={submitting}>
-              {submitting ? (
-                <>
-                  <Loader2 className="animate-spin" /> Sending…
-                </>
-              ) : (
-                <>Send magic link</>
-              )}
-            </Button>
-          </form>
-        )}
+        <p className="mt-4 text-center text-sm text-muted-foreground">
+          {isSignUp ? 'Already have an account?' : 'New here?'}{' '}
+          <button
+            type="button"
+            onClick={() => {
+              setMode((m) => (m === 'sign-up' ? 'sign-in' : 'sign-up'));
+              setError(null);
+            }}
+            disabled={submitting}
+            className="font-medium text-foreground underline underline-offset-4 hover:no-underline disabled:opacity-50"
+          >
+            {isSignUp ? 'Sign in' : 'Create an account'}
+          </button>
+        </p>
       </CardContent>
     </>
   );

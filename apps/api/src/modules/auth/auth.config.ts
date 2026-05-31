@@ -11,9 +11,15 @@ import { PrismaClient } from '@prisma/client';
 /**
  * better-auth instance + factory (T6.2).
  *
- * Email magic-link only for v1 (no Google/LinkedIn OAuth yet — keeps the
- * setup surface minimal). Plan calls for those providers later; they slot
- * in as additional plugins without changing the User/Session shape.
+ * Two sign-in methods, no OAuth yet (Google/LinkedIn slot in later as
+ * additional plugins without changing the User/Session shape):
+ *
+ *   1. Email + password — the zero-dependency baseline. Works with nothing
+ *      but a Postgres connection, so a self-hoster can run getbeyond without
+ *      configuring any email transport (no SMTP / Resend). This is the
+ *      default path for self-host installs.
+ *   2. Email magic-link — passwordless, but requires an email transport to
+ *      be useful outside dev (see "Magic-link delivery" below). Optional.
  *
  * Where the orgId comes from:
  *   - Our User table requires `orgId` NOT NULL but better-auth has no
@@ -29,7 +35,9 @@ import { PrismaClient } from '@prisma/client';
  *   - Prod: send via Resend (RESEND_API_KEY in env). v1 doesn't ship the
  *     full Resend wiring — that lands when we have a real production
  *     deploy target. For now non-dev environments throw if RESEND_API_KEY
- *     is missing, so the failure mode is loud.
+ *     is missing, so the failure mode is loud. Self-hosters who don't want
+ *     to configure email can ignore magic-link entirely and use the
+ *     email+password path, which has no transport dependency.
  *
  * SDK quarantine:
  *   - This is the ONLY file that imports `better-auth`. The route handler
@@ -148,10 +156,31 @@ export async function createAuth(prisma: PrismaClient) {
       additionalFields: {
         // activeOrgId rides on the session user. AuthGuard verifies a
         // matching OrgMembership exists each request before trusting it.
-        activeOrgId: { type: 'string', required: true, input: false },
+        //
+        // required:false is deliberate even though the DB column is NOT NULL.
+        // better-auth enforces `required:true` as a pre-insert MISSING_FIELD
+        // check that runs BEFORE databaseHooks.user.create.before — and the
+        // client can't supply activeOrgId (the org doesn't exist yet), so a
+        // required field 400s every sign-up. input:false keeps it out of the
+        // client payload; the before-hook always stamps activeOrgId, so the
+        // NOT NULL column is satisfied at insert time regardless.
+        activeOrgId: { type: 'string', required: false, input: false },
       },
     },
-    emailAndPassword: { enabled: false },
+    emailAndPassword: {
+      // The self-host baseline: no email transport required. better-auth
+      // bcrypts the password into the credential Account row.
+      enabled: true,
+      minPasswordLength: 8,
+      maxPasswordLength: 128,
+      // Sign-up returns a session immediately — no separate sign-in round
+      // trip, and no verification email to send (we have no transport).
+      autoSignIn: true,
+      // We can't send a verification email without a transport, so don't
+      // gate sign-in on it. Email-ownership proof is a later concern once
+      // Resend/SMTP is wired (then this flips to true for hosted cloud).
+      requireEmailVerification: false,
+    },
     plugins: [
       magicLink({
         expiresIn: MAGIC_LINK_EXPIRY_SECONDS,

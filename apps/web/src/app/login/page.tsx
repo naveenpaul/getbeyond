@@ -2,7 +2,7 @@
 
 import { Suspense, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { Loader2, MailCheck } from 'lucide-react';
+import { Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import {
@@ -12,17 +12,21 @@ import {
   CardHeader,
   CardTitle,
 } from '@/components/ui/card';
-import { signIn, useSession } from '@/lib/auth-client';
+import { signIn, signUp, useSession } from '@/lib/auth-client';
 
 /**
- * Sign-in via email magic link (T6.3).
+ * Sign-in / sign-up via email + password (T6.3).
  *
- *   1. User enters email + clicks "Send magic link"
- *   2. API mints a token, persists Verification, sends the URL
- *      (dev: stdout · prod: Resend — see auth.config.ts)
- *   3. User clicks the link in their inbox → /api/auth/magic-link/verify
- *   4. better-auth sets the session cookie, redirects to `callbackURL`
- *      (defaults to /research/new on first sign-in)
+ * Email+password is the default because it has no email-transport
+ * dependency — a self-hoster can run getbeyond with nothing but Postgres.
+ * (The magic-link server route stays available for deployments that have
+ * wired an email provider; it just isn't surfaced here.)
+ *
+ *   1. New user → "Create account": signUp.email({ email, password, name }).
+ *      Server autoSignIn mints a session immediately; org + owner membership
+ *      are created by databaseHooks (auth.config.ts).
+ *   2. Returning user → "Sign in": signIn.email({ email, password }).
+ *   3. On success the session cookie is set → redirect to `callbackURL`.
  *
  * If the user is already signed in, redirect immediately.
  */
@@ -43,15 +47,33 @@ export default function LoginPage(): React.JSX.Element {
   );
 }
 
+type Mode = 'sign-in' | 'sign-up';
+
+/** Friendly default display name from the email local-part. */
+function deriveName(email: string): string {
+  return email.split('@')[0] || email;
+}
+
 function LoginForm(): React.JSX.Element {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const callbackURL = searchParams.get('next') ?? '/research/new';
+  // Clamp `next` to a same-origin relative path. The old magic-link flow
+  // handed callbackURL to better-auth, which validates it against
+  // trustedOrigins; the client-side router.replace below has no such guard, so
+  // an unvalidated `next` (e.g. ?next=https://evil.com or //evil.com) would be
+  // an open redirect — phish the user through a real login, then bounce them
+  // off-origin. Only accept paths starting with a single '/'.
+  const rawNext = searchParams.get('next');
+  const callbackURL =
+    rawNext && rawNext.startsWith('/') && !rawNext.startsWith('//')
+      ? rawNext
+      : '/research/new';
 
   const session = useSession();
+  const [mode, setMode] = useState<Mode>('sign-in');
   const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
   const [submitting, setSubmitting] = useState(false);
-  const [sent, setSent] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   // Already signed in → bounce.
@@ -60,95 +82,139 @@ function LoginForm(): React.JSX.Element {
     return <></>;
   }
 
+  const canSubmit =
+    email.trim().length > 0 && password.length >= 8 && !submitting;
+
   async function onSubmit(e: React.FormEvent): Promise<void> {
     e.preventDefault();
-    if (submitting || !email.trim()) return;
+    if (!canSubmit) return;
     setSubmitting(true);
     setError(null);
     try {
-      const { error: signInError } = await signIn.magicLink({
-        email: email.trim(),
-        callbackURL,
-      });
-      if (signInError) {
-        setError(signInError.message ?? 'Could not send magic link');
+      const trimmed = email.trim();
+      const { error: authError } =
+        mode === 'sign-up'
+          ? await signUp.email({
+              email: trimmed,
+              password,
+              name: deriveName(trimmed),
+            })
+          : await signIn.email({ email: trimmed, password });
+
+      if (authError) {
+        setError(
+          authError.message ??
+            (mode === 'sign-up'
+              ? 'Could not create account'
+              : 'Invalid email or password'),
+        );
         setSubmitting(false);
         return;
       }
-      setSent(true);
+      router.replace(callbackURL);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unknown error');
       setSubmitting(false);
     }
   }
 
+  function toggleMode(): void {
+    setMode((m) => (m === 'sign-in' ? 'sign-up' : 'sign-in'));
+    setError(null);
+  }
+
+  const isSignUp = mode === 'sign-up';
+
   return (
     <main className="container flex min-h-screen items-center justify-center py-12">
       <Card className="w-full max-w-md">
         <CardHeader>
-          <CardTitle>Sign in to getbeyond ai</CardTitle>
+          <CardTitle>
+            {isSignUp
+              ? 'Create your getbeyond ai account'
+              : 'Sign in to getbeyond ai'}
+          </CardTitle>
           <CardDescription>
-            We&apos;ll email you a one-tap link. No passwords.
+            {isSignUp
+              ? 'Use your email and a password (at least 8 characters).'
+              : 'Sign in with your email and password.'}
           </CardDescription>
         </CardHeader>
         <CardContent>
-          {sent ? (
-            <div className="space-y-3 text-sm">
-              <div className="flex items-center gap-2 text-emerald-700 dark:text-emerald-400">
-                <MailCheck className="h-4 w-4" />
-                <span>Magic link sent to {email}</span>
-              </div>
-              <p className="text-muted-foreground">
-                Click the link from your inbox to finish signing in. The link
-                expires in 15 minutes.
-              </p>
-              <p className="text-xs text-muted-foreground">
-                Dev mode? Check the API process stdout — the link prints
-                there too.
-              </p>
-            </div>
-          ) : (
-            <form className="space-y-4" onSubmit={onSubmit}>
-              <div className="space-y-2">
-                <label
-                  htmlFor="email"
-                  className="text-sm font-medium text-foreground"
-                >
-                  Email
-                </label>
-                <Input
-                  id="email"
-                  type="email"
-                  autoFocus
-                  required
-                  placeholder="you@example.com"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  disabled={submitting}
-                />
-              </div>
-
-              {error ? (
-                <div className="rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
-                  {error}
-                </div>
-              ) : null}
-
-              <Button
-                type="submit"
-                className="w-full"
-                disabled={submitting || !email.trim()}
+          <form className="space-y-4" onSubmit={onSubmit}>
+            <div className="space-y-2">
+              <label
+                htmlFor="email"
+                className="text-sm font-medium text-foreground"
               >
-                {submitting ? (
-                  <>
-                    <Loader2 className="animate-spin" /> Sending…
-                  </>
-                ) : (
-                  <>Send magic link</>
-                )}
-              </Button>
-            </form>
-          )}
+                Email
+              </label>
+              <Input
+                id="email"
+                type="email"
+                autoFocus
+                required
+                autoComplete="email"
+                placeholder="you@example.com"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                disabled={submitting}
+              />
+            </div>
+
+            <div className="space-y-2">
+              <label
+                htmlFor="password"
+                className="text-sm font-medium text-foreground"
+              >
+                Password
+              </label>
+              <Input
+                id="password"
+                type="password"
+                required
+                minLength={8}
+                autoComplete={isSignUp ? 'new-password' : 'current-password'}
+                placeholder={
+                  isSignUp ? 'At least 8 characters' : 'Your password'
+                }
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                disabled={submitting}
+              />
+            </div>
+
+            {error ? (
+              <div className="rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
+                {error}
+              </div>
+            ) : null}
+
+            <Button type="submit" className="w-full" disabled={!canSubmit}>
+              {submitting ? (
+                <>
+                  <Loader2 className="animate-spin" />{' '}
+                  {isSignUp ? 'Creating account…' : 'Signing in…'}
+                </>
+              ) : isSignUp ? (
+                'Create account'
+              ) : (
+                'Sign in'
+              )}
+            </Button>
+          </form>
+
+          <p className="mt-4 text-center text-sm text-muted-foreground">
+            {isSignUp ? 'Already have an account?' : "Don't have an account?"}{' '}
+            <button
+              type="button"
+              onClick={toggleMode}
+              disabled={submitting}
+              className="font-medium text-foreground underline underline-offset-4 hover:no-underline disabled:opacity-50"
+            >
+              {isSignUp ? 'Sign in' : 'Create one'}
+            </button>
+          </p>
         </CardContent>
       </Card>
     </main>
