@@ -13,7 +13,8 @@ import { CampaignWorker } from './campaign.worker';
  * Wires the campaign controller (HTTP + SSE), the service (create/enqueue +
  * reads), and the pg-boss worker that runs the orchestrator. The orchestrator
  * itself is a plain class the worker constructs per job; it reuses the teammate
- * runtime (LLM_PROVIDER) and the RunEventBus, both exported by TeammatesModule.
+ * runtime (LlmResolver for the per-run provider) and the RunEventBus, both
+ * exported by TeammatesModule.
  */
 @Module({
   imports: [PrismaModule, QueueModule, AuthModule, TeammatesModule],

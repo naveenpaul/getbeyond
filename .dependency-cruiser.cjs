@@ -34,17 +34,18 @@ module.exports = {
       },
     },
     {
-      name: 'anthropic-sdk-only-in-runtime',
+      name: 'llm-sdk-only-in-providers',
       severity: 'error',
       comment:
-        'Architecture invariant #3: every LLM call routes through callModel(). ' +
-        'The Anthropic SDK should live only in apps/api/src/modules/teammates/runtime/. ' +
-        'If a teammate or feature needs to drive Claude differently, extend callModel ' +
-        'rather than importing the SDK directly.',
+        'Architecture invariant #3 + #5: every LLM call routes through callModel(), ' +
+        'and a vendor LLM SDK (Anthropic, OpenAI) lives ONLY in the provider adapters ' +
+        'at apps/api/src/modules/teammates/runtime/providers/. The rest of the runtime ' +
+        'uses the neutral LlmProvider interface; extend a provider adapter rather than ' +
+        'importing an SDK elsewhere.',
       from: {
-        pathNot: '^apps/api/src/modules/teammates/runtime/',
+        pathNot: '^apps/api/src/modules/teammates/runtime/providers/',
       },
-      to: { path: '^@anthropic-ai/sdk' },
+      to: { path: '^(@anthropic-ai/sdk|openai)' },
     },
     {
       name: 'no-circular',

@@ -28,7 +28,8 @@ export interface ToolContext {
 }
 
 export interface AgentTool {
-  /** Name surfaced to the model. Must match the Anthropic Tool.name. */
+  /** Name surfaced to the model. Must match the tool name the provider returns
+   *  in its tool calls (provider-neutral — Anthropic, OpenAI, etc.). */
   name: string;
   /** Description surfaced to the model. */
   description: string;

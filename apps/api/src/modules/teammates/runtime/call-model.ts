@@ -1,4 +1,5 @@
 import type { PrismaClient } from '@prisma/client';
+import { Provider } from '@prisma/client';
 import {
   assertWithinBudget,
   BudgetExceededError,
@@ -86,6 +87,13 @@ export interface CallModelResult {
   costCents: number;
 }
 
+/** Map a provider's id to the ModelCall audit enum; undefined when unknown. */
+function providerEnum(name: string): Provider | undefined {
+  if (name === 'anthropic') return Provider.anthropic;
+  if (name === 'openai') return Provider.openai;
+  return undefined;
+}
+
 export async function callModel(
   prisma: PrismaClient,
   provider: LlmProvider,
@@ -123,6 +131,7 @@ export async function callModel(
   const modelCall = await prisma.modelCall.create({
     data: {
       runId: params.runId,
+      provider: providerEnum(provider.name),
       modelName: params.modelName,
       inputTokens: message.usage.inputTokens,
       outputTokens: message.usage.outputTokens,

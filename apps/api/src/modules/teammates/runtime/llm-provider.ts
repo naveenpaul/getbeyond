@@ -26,12 +26,3 @@ export interface LlmProvider {
   /** Make one model call, translating neutral params to/from the vendor API. */
   createMessage(params: CreateMessageParams): Promise<CreateMessageResult>;
 }
-
-/**
- * DI token for the per-run LLM provider.
- *
- * In P1 this resolves to a singleton `AnthropicProvider` built from env
- * (`ANTHROPIC_API_KEY`). In later phases a registry/resolver replaces the
- * singleton with a per-run, per-org provider bound to the resolved key.
- */
-export const LLM_PROVIDER = Symbol.for('@getbeyond/llm-provider');
