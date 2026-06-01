@@ -58,6 +58,7 @@ model Organization {
   syncRuns          SyncRun[]
   llmCredentials    OrgLlmCredential[]
   teammateConfigs   OrgTeammateConfig[]
+  campaigns         Campaign[]
 
   @@map("organizations")
 }
@@ -462,6 +463,40 @@ model OrgTeammateConfig {
 
   @@unique([orgId, teammate])
   @@map("org_teammate_configs")
+}
+
+// ============================================================================
+// Campaigns — the maintained "activity" behind the chat workspace. A campaign
+// is a lookalike-sourcing run: derive an ICP from a wins list, source a
+// candidate pool, qualify + rank via the Researcher. See
+// docs/product-workflow-spec.md. The orchestrator + run linkage land in a
+// follow-up; this is the persisted entity + status.
+// ============================================================================
+
+enum CampaignStatus {
+  draft // created, not yet run
+  running // orchestrator executing
+  completed
+  failed
+}
+
+model Campaign {
+  id     String         @id @default(cuid())
+  orgId  String
+  title  String
+  goal   String // the natural-language intent the user typed in the chat
+  status CampaignStatus @default(draft)
+  // Soft reference (like ContactList.source) to the ContactList of closed-won
+  // accounts the ICP is derived from. Nullable until a wins list is attached.
+  winsListId String?
+  createdBy  String // userId
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  org Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  @@index([orgId, status])
+  @@map("campaigns")
 }
 
 // ============================================================================
