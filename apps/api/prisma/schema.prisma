@@ -56,6 +56,8 @@ model Organization {
   contactLists      ContactList[]
   connectorAccounts ConnectorAccount[]
   syncRuns          SyncRun[]
+  llmCredentials    OrgLlmCredential[]
+  teammateConfigs   OrgTeammateConfig[]
 
   @@map("organizations")
 }
@@ -275,6 +277,12 @@ model AgentRun {
 model ModelCall {
   id           String   @id @default(cuid())
   runId        String
+  // Which LLM provider served this call. Nullable: pre-abstraction rows (and
+  // rows written before P5 wires call-model.ts to populate it) have no
+  // provider recorded. Backfilling a NOT NULL column would require a default
+  // for existing rows, which would silently mislabel historical Anthropic-only
+  // calls — leaving it null is the honest "unknown" state. (Populated in P5.)
+  provider     Provider?
   modelName    String
   inputTokens  Int
   outputTokens Int
@@ -408,6 +416,52 @@ model TeammateConfig {
   updatedAt          DateTime       @updatedAt
 
   @@map("teammate_configs")
+}
+
+// ============================================================================
+// LLM provider abstraction (P3) — org-scoped BYO credentials + routing config.
+// Credential per (org, provider); routing per (org, teammate). See
+// docs/plans/llm-provider-abstraction.md.
+// ============================================================================
+
+enum Provider {
+  anthropic
+  openai
+}
+
+// Org-scoped bring-your-own LLM key. Mirrors ConnectorAccount: a sealed secret
+// + version, unique per (org, provider). The sealed `apiKey` decrypts only
+// inside the provider adapter boundary via credential-encryption.ts.
+model OrgLlmCredential {
+  id         String   @id @default(cuid())
+  orgId      String
+  provider   Provider
+  apiKey     Bytes // sealed via credential-encryption.ts; decrypts only in adapter
+  keyVersion Int      @default(1)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  org Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  @@unique([orgId, provider])
+  @@map("org_llm_credentials")
+}
+
+// Org-scoped routing for a teammate: which provider + which models. Supersedes
+// the routing role of the (global) TeammateConfig table.
+model OrgTeammateConfig {
+  id           String   @id @default(cuid())
+  orgId        String
+  teammate     String
+  provider     Provider @default(anthropic)
+  modelPrimary String   @default("claude-sonnet-4-6")
+  modelFast    String   @default("claude-haiku-4-5-20251001")
+  updatedAt    DateTime @updatedAt
+
+  org Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  @@unique([orgId, teammate])
+  @@map("org_teammate_configs")
 }
 
 // ============================================================================
