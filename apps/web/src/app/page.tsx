@@ -1,5 +1,6 @@
 'use client';
 
+import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import {
   ArrowRight,
@@ -17,6 +18,7 @@ import {
   CardHeader,
   CardTitle,
 } from '@/components/ui/card';
+import { listContacts, listDrafts } from '@/lib/api-client';
 import { useIdentity } from '@/lib/use-identity';
 
 /**
@@ -85,7 +87,49 @@ function UnauthenticatedHome(): React.JSX.Element {
   );
 }
 
+/** A count we surface on a workbench tile: loading → number, or null on error. */
+type CountState =
+  | { status: 'loading' }
+  | { status: 'ready'; value: number }
+  | { status: 'error' };
+
+/**
+ * Fetches a single `total` from a list endpoint for a tile badge. We request
+ * `limit: 1` because we only need the count, not the rows. Any failure is
+ * swallowed into an `error` state so a flaky API never blows up the home
+ * page — the tile simply renders without a badge.
+ */
+function useCount(fetcher: () => Promise<number>): CountState {
+  const [state, setState] = useState<CountState>({ status: 'loading' });
+
+  useEffect(() => {
+    let cancelled = false;
+    fetcher()
+      .then((value) => {
+        if (!cancelled) setState({ status: 'ready', value });
+      })
+      .catch(() => {
+        if (!cancelled) setState({ status: 'error' });
+      });
+    return () => {
+      cancelled = true;
+    };
+    // `fetcher` is a stable inline closure per render of Workbench; we only
+    // want to fetch once on mount.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  return state;
+}
+
 function Workbench({ email }: { email: string | null }): React.JSX.Element {
+  const pendingDrafts = useCount(() =>
+    listDrafts({ status: 'pending', limit: 1 }).then((res) => res.total),
+  );
+  const contacts = useCount(() =>
+    listContacts({ limit: 1 }).then((res) => res.total),
+  );
+
   return (
     <main className="container space-y-8 py-12">
       <header className="space-y-1">
@@ -101,6 +145,7 @@ function Workbench({ email }: { email: string | null }): React.JSX.Element {
           icon={<Users className="h-4 w-4" />}
           title="Contacts"
           body="Browse the people in your org. Run Researcher or SDR Drafter against any row."
+          count={contacts}
         />
         <Tile
           href="/research/new"
@@ -119,6 +164,7 @@ function Workbench({ email }: { email: string | null }): React.JSX.Element {
           icon={<FileText className="h-4 w-4" />}
           title="Drafts inbox"
           body="Review what your teammates have produced. Every claim has a citation or is flagged abstained."
+          count={pendingDrafts}
         />
         <Tile
           href="/settings/team"
@@ -136,18 +182,24 @@ function Tile({
   icon,
   title,
   body,
+  count,
 }: {
   href: string;
   icon: React.ReactNode;
   title: string;
   body: string;
+  /** Optional live count badge, top-right. Omitted on tiles without one. */
+  count?: CountState;
 }): React.JSX.Element {
   return (
     <Link href={href} className="block group">
       <Card className="h-full transition-colors group-hover:border-foreground/30">
         <CardHeader className="space-y-2">
-          <div className="flex h-8 w-8 items-center justify-center rounded-md bg-muted text-muted-foreground">
-            {icon}
+          <div className="flex items-center justify-between">
+            <div className="flex h-8 w-8 items-center justify-center rounded-md bg-muted text-muted-foreground">
+              {icon}
+            </div>
+            {count ? <TileCount count={count} /> : null}
           </div>
           <CardTitle className="text-base">{title}</CardTitle>
           <CardDescription>{body}</CardDescription>
@@ -159,6 +211,27 @@ function Tile({
         </CardContent>
       </Card>
     </Link>
+  );
+}
+
+/**
+ * Subtle live count for a tile. Shows a spinner while loading, the number
+ * once ready, and nothing at all on error (silent graceful fallback).
+ */
+function TileCount({ count }: { count: CountState }): React.JSX.Element | null {
+  if (count.status === 'loading') {
+    return (
+      <Loader2
+        className="h-3.5 w-3.5 animate-spin text-muted-foreground"
+        aria-hidden
+      />
+    );
+  }
+  if (count.status === 'error') return null;
+  return (
+    <span className="text-sm font-medium tabular-nums text-muted-foreground">
+      {count.value}
+    </span>
   );
 }
 
