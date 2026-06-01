@@ -3,17 +3,18 @@ import type { NextConfig } from 'next';
 /**
  * Next config (T5.1).
  *
- * `transpilePackages: ['@getbeyond/shared']` is required because the shared
- * package ships raw TypeScript (no build step). Next's compiler handles it
- * inline. The same pattern will apply to ext-client / personality-client
- * when they land.
+ * `@getbeyond/shared` is intentionally NOT in `transpilePackages`: it now ships
+ * a compiled CommonJS build (`dist/`), so Next consumes it as a normal prebuilt
+ * dependency. Adding it to transpilePackages makes Next run its source loaders
+ * (incl. React Fast Refresh, which injects `import.meta.webpackHot`) over the
+ * already-compiled CJS and fails to parse it ("Cannot use 'import.meta' outside
+ * a module"). If a future workspace package ships RAW TS (no build), that one
+ * goes in transpilePackages; built packages do not.
  *
- * No remote-image config, no experimental flags — keep the surface boring
- * until we hit a need.
+ * No remote-image config, no experimental flags — keep the surface boring.
  */
 const nextConfig: NextConfig = {
   reactStrictMode: true,
-  transpilePackages: ['@getbeyond/shared'],
 };
 
 export default nextConfig;
