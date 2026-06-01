@@ -2,31 +2,22 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
-import {
-  ArrowRight,
-  FileText,
-  Loader2,
-  Mail,
-  Search,
-  Users,
-} from 'lucide-react';
+import { ArrowRight, Loader2, Plus } from 'lucide-react';
+import type { CampaignStatus, CampaignSummary } from '@getbeyond/shared';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from '@/components/ui/card';
-import { listContacts, listDrafts } from '@/lib/api-client';
+import { CampaignComposer } from '@/components/CampaignComposer';
+import { ApiError, listCampaigns } from '@/lib/api-client';
+import { formatRelativeTime } from '@/lib/campaign-transcript';
 import { useIdentity } from '@/lib/use-identity';
 
 /**
  * Home page.
  *
  * Unauthenticated visitors see the marketing card with a "sign in" CTA.
- * Authenticated users see a workbench with one tile per surface
- * (contacts, research, drafter, drafts inbox, settings).
+ * Authenticated users land on the campaigns workspace: a prominent "start a
+ * campaign" composer plus the list of their campaigns. Opening a campaign
+ * routes to its chat workspace at /campaigns/[id].
  */
 export default function HomePage(): React.JSX.Element {
   const { status, identity } = useIdentity();
@@ -43,7 +34,7 @@ export default function HomePage(): React.JSX.Element {
     return <UnauthenticatedHome />;
   }
 
-  return <Workbench email={identity.email} />;
+  return <CampaignsHome />;
 }
 
 function UnauthenticatedHome(): React.JSX.Element {
@@ -55,8 +46,8 @@ function UnauthenticatedHome(): React.JSX.Element {
             AI GTM teammates for solo founders.
           </h1>
           <p className="mx-auto max-w-xl text-lg text-muted-foreground">
-            Audit every prompt, every claim, every source — in code and in
-            the app.
+            Audit every prompt, every claim, every source — in code and in the
+            app.
           </p>
         </div>
 
@@ -87,151 +78,152 @@ function UnauthenticatedHome(): React.JSX.Element {
   );
 }
 
-/** A count we surface on a workbench tile: loading → number, or null on error. */
-type CountState =
+type ListState =
   | { status: 'loading' }
-  | { status: 'ready'; value: number }
-  | { status: 'error' };
+  | { status: 'ready'; items: CampaignSummary[] }
+  | { status: 'error'; message: string };
 
-/**
- * Fetches a single `total` from a list endpoint for a tile badge. We request
- * `limit: 1` because we only need the count, not the rows. Any failure is
- * swallowed into an `error` state so a flaky API never blows up the home
- * page — the tile simply renders without a badge.
- */
-function useCount(fetcher: () => Promise<number>): CountState {
-  const [state, setState] = useState<CountState>({ status: 'loading' });
+function CampaignsHome(): React.JSX.Element {
+  const [state, setState] = useState<ListState>({ status: 'loading' });
 
   useEffect(() => {
     let cancelled = false;
-    fetcher()
-      .then((value) => {
-        if (!cancelled) setState({ status: 'ready', value });
+    listCampaigns()
+      .then((res) => {
+        if (!cancelled) setState({ status: 'ready', items: res.items });
       })
-      .catch(() => {
-        if (!cancelled) setState({ status: 'error' });
+      .catch((err: unknown) => {
+        if (cancelled) return;
+        setState({
+          status: 'error',
+          message:
+            err instanceof ApiError
+              ? `${err.status} — ${err.body.slice(0, 200)}`
+              : err instanceof Error
+                ? err.message
+                : 'Unknown error',
+        });
       });
     return () => {
       cancelled = true;
     };
-    // `fetcher` is a stable inline closure per render of Workbench; we only
-    // want to fetch once on mount.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  return state;
-}
-
-function Workbench({ email }: { email: string | null }): React.JSX.Element {
-  const pendingDrafts = useCount(() =>
-    listDrafts({ status: 'pending', limit: 1 }).then((res) => res.total),
-  );
-  const contacts = useCount(() =>
-    listContacts({ limit: 1 }).then((res) => res.total),
-  );
-
   return (
-    <main className="container space-y-8 py-12">
-      <header className="space-y-1">
-        <h1 className="text-2xl font-semibold tracking-tight">Workbench</h1>
+    <main className="container max-w-3xl space-y-10 py-12">
+      <header className="space-y-2">
+        <h1 className="text-2xl font-semibold tracking-tight">Campaigns</h1>
         <p className="text-sm text-muted-foreground">
-          Signed in as {email ?? 'unknown'}.
+          Describe who you want to reach. We&apos;ll derive your ICP, source
+          lookalikes, and rank them by fit — every signal cited.
         </p>
       </header>
 
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        <Tile
-          href="/contacts"
-          icon={<Users className="h-4 w-4" />}
-          title="Contacts"
-          body="Browse the people in your org. Run Researcher or SDR Drafter against any row."
-          count={contacts}
-        />
-        <Tile
-          href="/research/new"
-          icon={<Search className="h-4 w-4" />}
-          title="Run Researcher"
-          body="Cited research brief on any person or company."
-        />
-        <Tile
-          href="/draft/sdr/new"
-          icon={<Mail className="h-4 w-4" />}
-          title="Draft an email"
-          body="SDR Drafter writes one cold-outreach email per contact."
-        />
-        <Tile
-          href="/drafts"
-          icon={<FileText className="h-4 w-4" />}
-          title="Drafts inbox"
-          body="Review what your teammates have produced. Every claim has a citation or is flagged abstained."
-          count={pendingDrafts}
-        />
-        <Tile
-          href="/settings/team"
-          icon={<Users className="h-4 w-4" />}
-          title="Team settings"
-          body="Invite teammates, manage roles."
-        />
-      </div>
+      <CampaignComposer variant="hero" autoFocus />
+
+      <section className="space-y-3">
+        <div className="flex items-center justify-between">
+          <h2 className="text-sm font-semibold text-foreground">
+            Your campaigns
+          </h2>
+        </div>
+        <CampaignList state={state} />
+      </section>
     </main>
   );
 }
 
-function Tile({
-  href,
-  icon,
-  title,
-  body,
-  count,
+function CampaignList({ state }: { state: ListState }): React.JSX.Element {
+  if (state.status === 'loading') {
+    return (
+      <div className="flex items-center gap-2 py-8 text-sm text-muted-foreground">
+        <Loader2 className="h-4 w-4 animate-spin" />
+        Loading campaigns…
+      </div>
+    );
+  }
+
+  if (state.status === 'error') {
+    return (
+      <div className="rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
+        Failed to load campaigns: {state.message}
+      </div>
+    );
+  }
+
+  if (state.items.length === 0) {
+    return (
+      <div className="rounded-lg border border-dashed p-8 text-center">
+        <div className="mx-auto mb-3 flex h-9 w-9 items-center justify-center rounded-md bg-muted text-muted-foreground">
+          <Plus className="h-4 w-4" />
+        </div>
+        <p className="text-sm font-medium text-foreground">No campaigns yet</p>
+        <p className="mx-auto mt-1 max-w-sm text-sm text-muted-foreground">
+          Start your first campaign with the box above — describe your goal and
+          point it at a source list.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <ul className="divide-y rounded-lg border">
+      {state.items.map((c) => (
+        <li key={c.id}>
+          <CampaignRow campaign={c} />
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function CampaignRow({
+  campaign,
 }: {
-  href: string;
-  icon: React.ReactNode;
-  title: string;
-  body: string;
-  /** Optional live count badge, top-right. Omitted on tiles without one. */
-  count?: CountState;
+  campaign: CampaignSummary;
 }): React.JSX.Element {
   return (
-    <Link href={href} className="block group">
-      <Card className="h-full transition-colors group-hover:border-foreground/30">
-        <CardHeader className="space-y-2">
-          <div className="flex items-center justify-between">
-            <div className="flex h-8 w-8 items-center justify-center rounded-md bg-muted text-muted-foreground">
-              {icon}
-            </div>
-            {count ? <TileCount count={count} /> : null}
-          </div>
-          <CardTitle className="text-base">{title}</CardTitle>
-          <CardDescription>{body}</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <span className="inline-flex items-center gap-1 text-xs text-muted-foreground group-hover:text-foreground">
-            Open <ArrowRight className="h-3 w-3" />
+    <Link
+      href={`/campaigns/${encodeURIComponent(campaign.id)}`}
+      className="group flex items-center justify-between gap-4 px-4 py-3 transition-colors hover:bg-muted/50"
+    >
+      <div className="min-w-0">
+        <div className="flex items-center gap-2">
+          <span className="truncate font-medium text-foreground">
+            {campaign.title}
           </span>
-        </CardContent>
-      </Card>
+          <StatusBadge status={campaign.status} />
+        </div>
+        <p className="mt-0.5 truncate text-sm text-muted-foreground">
+          {campaign.goal}
+        </p>
+      </div>
+      <div className="flex shrink-0 flex-col items-end gap-0.5 text-xs text-muted-foreground">
+        <span className="tabular-nums">
+          {campaign.candidateCount}{' '}
+          {campaign.candidateCount === 1 ? 'candidate' : 'candidates'}
+        </span>
+        <span>{formatRelativeTime(campaign.updatedAt)}</span>
+      </div>
     </Link>
   );
 }
 
-/**
- * Subtle live count for a tile. Shows a spinner while loading, the number
- * once ready, and nothing at all on error (silent graceful fallback).
- */
-function TileCount({ count }: { count: CountState }): React.JSX.Element | null {
-  if (count.status === 'loading') {
-    return (
-      <Loader2
-        className="h-3.5 w-3.5 animate-spin text-muted-foreground"
-        aria-hidden
-      />
-    );
-  }
-  if (count.status === 'error') return null;
+const STATUS_VARIANT: Record<
+  CampaignStatus,
+  'secondary' | 'success' | 'warning' | 'destructive'
+> = {
+  draft: 'secondary',
+  running: 'warning',
+  completed: 'success',
+  failed: 'destructive',
+};
+
+function StatusBadge({ status }: { status: CampaignStatus }): React.JSX.Element {
   return (
-    <span className="text-sm font-medium tabular-nums text-muted-foreground">
-      {count.value}
-    </span>
+    <Badge variant={STATUS_VARIANT[status]} className="shrink-0">
+      {status}
+    </Badge>
   );
 }
 

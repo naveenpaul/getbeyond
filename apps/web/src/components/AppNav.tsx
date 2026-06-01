@@ -3,7 +3,15 @@
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { FileText, Mail, Menu, Search, Users, X } from 'lucide-react';
+import {
+  FileText,
+  Mail,
+  Menu,
+  Megaphone,
+  Search,
+  Users,
+  X,
+} from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { UserMenu } from '@/components/UserMenu';
 import { useIdentity } from '@/lib/use-identity';
@@ -41,6 +49,9 @@ interface NavItem {
 }
 
 const NAV_ITEMS: readonly NavItem[] = [
+  // Campaigns is the home/primary surface. Its `match` is '/' but we special-
+  // case the home route in `isActive` so it doesn't light up under every path.
+  { href: '/', label: 'Campaigns', icon: Megaphone, match: '/campaigns' },
   { href: '/contacts', label: 'Contacts', icon: Users, match: '/contacts' },
   { href: '/research/new', label: 'Researcher', icon: Search, match: '/research' },
   { href: '/draft/sdr/new', label: 'SDR Drafter', icon: Mail, match: '/draft' },
@@ -49,8 +60,15 @@ const NAV_ITEMS: readonly NavItem[] = [
 
 const MOBILE_NAV_PANEL_ID = 'app-nav-mobile-panel';
 
-/** True when `pathname` falls within the section rooted at `match`. */
+/**
+ * True when `pathname` falls within the section rooted at `match`. The
+ * Campaigns section spans both the home list (`/`, which IS the campaign list)
+ * and the `/campaigns/...` detail routes, so it gets a small special case.
+ */
 function isActive(pathname: string, match: string): boolean {
+  if (match === '/campaigns') {
+    return pathname === '/' || pathname === '/campaigns' || pathname.startsWith('/campaigns/');
+  }
   return pathname === match || pathname.startsWith(`${match}/`);
 }
 

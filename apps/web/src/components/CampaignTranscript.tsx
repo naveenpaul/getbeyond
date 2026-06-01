@@ -1,0 +1,251 @@
+'use client';
+
+import {
+  Check,
+  CircleAlert,
+  Compass,
+  Loader2,
+  Sparkles,
+} from 'lucide-react';
+import type { QualifiedCandidate } from '@getbeyond/shared';
+import { Badge } from '@/components/ui/badge';
+import { CitationChip } from '@/components/CitationChip';
+import { cn } from '@/lib/utils';
+import {
+  buildCampaignTranscript,
+  type CampaignRow,
+} from '@/lib/campaign-transcript';
+import type { CampaignEvent } from '@getbeyond/shared';
+
+interface CampaignTranscriptProps {
+  events: CampaignEvent[];
+  /** True once a terminal campaign event has arrived (stream closed). */
+  terminated: boolean;
+}
+
+/**
+ * Live transcript for a campaign run. Purely view — it derives its rows from
+ * the event array via the pure `buildCampaignTranscript` reducer, and the SSE
+ * subscription lives in the page via useCampaignStream.
+ *
+ * Three row kinds render distinctly: phase lines (icp/sourcing narration),
+ * tool lines ("running: <tool>" — the what's-being-run view), and candidate
+ * result cards (fitScore + cited claims).
+ */
+export function CampaignTranscript({
+  events,
+  terminated,
+}: CampaignTranscriptProps): React.JSX.Element {
+  const { rows } = buildCampaignTranscript(events);
+
+  if (rows.length === 0) {
+    return (
+      <div className="flex items-center gap-2 text-sm text-muted-foreground">
+        {terminated ? (
+          'No activity recorded for this campaign.'
+        ) : (
+          <>
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            Starting the campaign…
+          </>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-3">
+      {rows.map((row) => (
+        <TranscriptRow key={row.key} row={row} />
+      ))}
+    </div>
+  );
+}
+
+function TranscriptRow({ row }: { row: CampaignRow }): React.JSX.Element {
+  switch (row.kind) {
+    case 'phase':
+      return (
+        <FeedLine
+          icon={<Compass className="h-3.5 w-3.5 text-muted-foreground" />}
+          primary={row.primary}
+          secondary={row.secondary}
+        />
+      );
+    case 'tool':
+      return (
+        <FeedLine
+          icon={
+            row.inFlight ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
+            ) : row.isError ? (
+              <CircleAlert className="h-3.5 w-3.5 text-destructive" />
+            ) : (
+              <Check className="h-3.5 w-3.5 text-emerald-600" />
+            )
+          }
+          primary={row.primary}
+          secondary={row.secondary}
+          isError={row.isError}
+        />
+      );
+    case 'candidate':
+      return (
+        <CandidateCard
+          candidate={row.candidate}
+          index={row.index}
+          total={row.total}
+        />
+      );
+    case 'terminal':
+      return (
+        <div className="flex items-baseline gap-2 pt-1 text-sm">
+          <span className="mt-1 self-start">
+            {row.isError ? (
+              <CircleAlert className="h-3.5 w-3.5 text-destructive" />
+            ) : (
+              <Sparkles className="h-3.5 w-3.5 text-emerald-600" />
+            )}
+          </span>
+          <div className="flex flex-1 flex-wrap items-baseline gap-x-2">
+            <span className={row.isError ? 'text-destructive' : 'text-foreground'}>
+              {row.primary}
+            </span>
+            {row.secondary ? (
+              <span className="text-xs text-muted-foreground">
+                {row.secondary}
+              </span>
+            ) : null}
+            <Badge
+              variant={row.isError ? 'destructive' : 'success'}
+              className="ml-auto"
+            >
+              {row.isError ? 'failed' : 'completed'}
+            </Badge>
+          </div>
+        </div>
+      );
+  }
+}
+
+function FeedLine({
+  icon,
+  primary,
+  secondary,
+  isError,
+}: {
+  icon: React.ReactNode;
+  primary: string;
+  secondary?: string;
+  isError?: boolean;
+}): React.JSX.Element {
+  return (
+    <div className="flex items-baseline gap-2 text-sm">
+      <span className="mt-1 self-start">{icon}</span>
+      <div className="flex flex-1 flex-wrap items-baseline gap-x-2">
+        <span className={isError ? 'text-destructive' : 'text-foreground'}>
+          {primary}
+        </span>
+        {secondary ? (
+          <span className="text-xs text-muted-foreground">{secondary}</span>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * A qualified candidate rendered as a result card: name + fit score, the
+ * one-line rationale, and the cited firmographic claims. Each cited claim gets
+ * a CitationChip; abstained claims render the muted "no source" tag — the
+ * cite-or-abstain trust contract surfaced inline.
+ */
+function CandidateCard({
+  candidate,
+  index,
+  total,
+}: {
+  candidate: QualifiedCandidate;
+  index: number;
+  total: number;
+}): React.JSX.Element {
+  // Footnote numbering deduplicated by citationId, mirroring ResearchDraftCard.
+  const citationIdToIndex = new Map<string, number>();
+  let nextIndex = 1;
+  for (const claim of candidate.claims) {
+    if (claim.citationId && !citationIdToIndex.has(claim.citationId)) {
+      citationIdToIndex.set(claim.citationId, nextIndex++);
+    }
+  }
+
+  return (
+    <div className="rounded-lg border bg-card p-4">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-baseline gap-x-2">
+            <span className="font-medium text-foreground">{candidate.name}</span>
+            {candidate.domain ? (
+              <span className="truncate font-mono text-xs text-muted-foreground">
+                {candidate.domain}
+              </span>
+            ) : null}
+          </div>
+          {candidate.linkedinUrl ? (
+            <a
+              href={candidate.linkedinUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-xs text-primary underline-offset-2 hover:underline"
+            >
+              LinkedIn
+            </a>
+          ) : null}
+        </div>
+        <div className="flex shrink-0 flex-col items-end gap-1">
+          <FitScore score={candidate.fitScore} />
+          <span className="text-[11px] tabular-nums text-muted-foreground">
+            {index + 1} of {total}
+          </span>
+        </div>
+      </div>
+
+      {candidate.rationale ? (
+        <p className="mt-2 text-sm leading-relaxed text-foreground">
+          {candidate.rationale}
+        </p>
+      ) : null}
+
+      {candidate.claims.length > 0 ? (
+        <ul className="mt-3 space-y-1.5 text-sm">
+          {candidate.claims.map((claim) => {
+            const idx = claim.citationId
+              ? citationIdToIndex.get(claim.citationId)
+              : undefined;
+            return (
+              <li key={claim.id} className="text-foreground">
+                {claim.text}
+                {claim.abstained ? (
+                  <CitationChip index={0} url={null} abstained />
+                ) : idx !== undefined ? (
+                  <CitationChip index={idx} url={claim.citationUrl} />
+                ) : null}
+              </li>
+            );
+          })}
+        </ul>
+      ) : null}
+    </div>
+  );
+}
+
+/** 0..1 fit/similarity rendered as a percentage badge, color-graded. */
+function FitScore({ score }: { score: number }): React.JSX.Element {
+  const pct = Math.round(Math.min(1, Math.max(0, score)) * 100);
+  const variant =
+    pct >= 75 ? 'success' : pct >= 50 ? 'secondary' : 'warning';
+  return (
+    <Badge variant={variant} className={cn('tabular-nums')}>
+      {pct}% fit
+    </Badge>
+  );
+}

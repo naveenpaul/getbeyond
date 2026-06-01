@@ -1,4 +1,8 @@
 import type {
+  CampaignDetailResponse,
+  CampaignListResponse,
+  CreateCampaignRequest,
+  CreateCampaignResponse,
   ResearcherRunEnqueueResponse,
   ResearcherRunRequest,
   ResearcherRunStatusResponse,
@@ -312,6 +316,48 @@ export async function getSdrDrafterRun(
 
 export function buildSdrDrafterStreamUrl(runId: string): string {
   return `${env.apiUrl}/teammates/sdr-drafter/runs/${encodeURIComponent(runId)}/stream`;
+}
+
+// ─── Campaigns (lookalike sourcing) ─────────────────────────────────────────
+//
+// A campaign derives an ICP from a wins list, sources a candidate pool, then
+// qualifies + ranks each candidate. The detail/list shapes plus the SSE event
+// union live in @getbeyond/shared so the client binds to the typed contract.
+
+export async function createCampaign(
+  payload: CreateCampaignRequest,
+): Promise<CreateCampaignResponse> {
+  const res = await fetch(`${env.apiUrl}/campaigns`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(payload),
+    credentials: 'include',
+  });
+  if (!res.ok) await readError(res);
+  return res.json() as Promise<CreateCampaignResponse>;
+}
+
+export async function listCampaigns(): Promise<CampaignListResponse> {
+  const res = await fetch(`${env.apiUrl}/campaigns`, {
+    credentials: 'include',
+  });
+  if (!res.ok) await readError(res);
+  return res.json() as Promise<CampaignListResponse>;
+}
+
+export async function getCampaign(
+  id: string,
+): Promise<CampaignDetailResponse> {
+  const res = await fetch(
+    `${env.apiUrl}/campaigns/${encodeURIComponent(id)}`,
+    { credentials: 'include' },
+  );
+  if (!res.ok) await readError(res);
+  return res.json() as Promise<CampaignDetailResponse>;
+}
+
+export function buildCampaignStreamUrl(id: string): string {
+  return `${env.apiUrl}/campaigns/${encodeURIComponent(id)}/stream`;
 }
 
 // ─── Org / invites / members ──────────────────────────────────────────────
