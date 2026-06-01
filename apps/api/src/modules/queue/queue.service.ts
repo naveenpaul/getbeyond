@@ -25,6 +25,14 @@ export class QueueService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(QueueService.name);
   private boss?: PgBoss;
   private readonly declaredQueues = new Set<string>();
+  // Serializes createQueue calls. createQueue runs DDL (partition CREATE
+  // TABLE + ALTER TABLE ADD CONSTRAINT on the shared pgboss.queue relation).
+  // NestJS fires sibling onModuleInit hooks concurrently (Promise.all), so
+  // multiple workers/reapers race into createQueue and Postgres deadlocks
+  // (40P01) acquiring ShareRowExclusiveLock. Chaining each createQueue onto
+  // a single tail promise makes the DDL strictly sequential; the per-name
+  // declaredQueues cache still short-circuits repeat calls.
+  private createChain: Promise<void> = Promise.resolve();
 
   /**
    * Connects to pg-boss and bootstraps its schema. Safe to call multiple
@@ -125,7 +133,22 @@ export class QueueService implements OnModuleInit, OnModuleDestroy {
     if (this.declaredQueues.has(queue)) {
       return;
     }
-    await boss.createQueue(queue);
-    this.declaredQueues.add(queue);
+    // Append to the serial chain so concurrent callers queue up behind each
+    // other instead of issuing parallel DDL. Re-check declaredQueues inside
+    // the critical section: a caller that was waiting may find the queue
+    // already created by the time its turn arrives.
+    //
+    // The chain's stored promise is kept rejection-free (the .catch swallows)
+    // so one failed createQueue doesn't poison every later caller; the real
+    // result is captured in `run` and awaited so this caller still sees errors.
+    const run = this.createChain.then(async () => {
+      if (this.declaredQueues.has(queue)) {
+        return;
+      }
+      await boss.createQueue(queue);
+      this.declaredQueues.add(queue);
+    });
+    this.createChain = run.catch(() => undefined);
+    await run;
   }
 }

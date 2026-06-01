@@ -61,7 +61,9 @@ export default defineConfig({
         'src/modules/connectors/csv-import.controller.ts',
         // pg-boss wrapper — framework wiring around a third-party library.
         // Tested via the worker integration suite (which exercises start/send/
-        // work end-to-end against a live Postgres + pg-boss schema).
+        // work end-to-end against a live Postgres + pg-boss schema). The one
+        // bit of real logic — ensureQueue's createQueue serialization (boot
+        // deadlock fix) — has dedicated unit coverage in queue.service.spec.ts.
         'src/modules/queue/queue.service.ts',
         // Worker — registers a pg-boss handler that delegates to runCsvImport.
         // Tested by csv-import.worker.integration.spec.ts (enqueue + assert
