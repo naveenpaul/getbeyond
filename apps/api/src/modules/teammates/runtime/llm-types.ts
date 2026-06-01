@@ -46,6 +46,14 @@ export interface Message {
   content: ContentBlock[];
 }
 
+/**
+ * Supported LLM providers. This is the runtime-side source of truth for the
+ * provider enum and is what the registry selects on. P3 introduces a Prisma
+ * `Provider` enum for persistence; the two must stay value-compatible (the
+ * resolver maps DB enum → this union). Keep this list and the registry in sync.
+ */
+export type ProviderName = 'anthropic' | 'openai';
+
 /** Tool the model may invoke this turn. `inputSchema` is JSON Schema. */
 export interface ToolDefinition {
   name: string;
